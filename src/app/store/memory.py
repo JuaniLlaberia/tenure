@@ -100,6 +100,15 @@ class InMemoryStore:
         lessons.sort(key=lambda lesson: lesson.created_at, reverse=True)
         return [_copy(lesson) for lesson in lessons]
 
+    async def delete_team(self, team_id: str) -> None:
+        self._teams.pop(team_id, None)
+        self._topics.pop(team_id, None)
+        for key in [k for k in self._trust if k[0] == team_id]:
+            del self._trust[key]
+        for records in (self._tasks, self._approvals, self._lessons):
+            for key in [k for k, v in records.items() if v.team_id == team_id]:
+                del records[key]
+
     async def get_profile(self, business_id: str) -> BusinessProfile | None:
         return _copy(self._profiles.get(business_id))
 

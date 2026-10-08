@@ -6,6 +6,7 @@ keeps its records in the Store; conversation progress stays in memory.
 
 import asyncio
 import logging
+import re
 from collections.abc import AsyncIterator, Callable
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
@@ -44,6 +45,7 @@ from contract import (
     Team,
     TeamHired,
     TemplateInfo,
+    Tools,
     Trust,
 )
 
@@ -53,6 +55,7 @@ UNDO_WINDOW = timedelta(minutes=10)
 MAX_REVISIONS = 2
 PROMOTION_STREAK = 5
 TOKENS_PER_STEP = 850
+EMAIL = re.compile(r"[\w.+-]+@[\w-]+(\.[\w-]+)+")
 POST_LIMIT = 300
 LADDER = list(AutonomyLevel)
 ACTS_ALONE = (AutonomyLevel.ACT_AND_REPORT, AutonomyLevel.AUTONOMOUS)
@@ -205,11 +208,13 @@ class FakeBrain:
         self,
         store: Store | None = None,
         *,
+        tools: Tools | None = None,
         delay: float = 0.0,
         promotion_streak: int = PROMOTION_STREAK,
         clock: Callable[[], datetime] = _utcnow,
     ) -> None:
         self._store = store or InMemoryStore()
+        self._tools = tools
         self._delay = delay
         self._promotion_streak = promotion_streak
         self._clock = clock
@@ -539,7 +544,7 @@ class FakeBrain:
             action = PostSocial(text=_clip(f"{opener} {brief}", POST_LIMIT))
         elif task.task_type == "newsletter":
             action = SendEmail(
-                to="newsletter@example.com",
+                to=await self._newsletter_address(task),
                 subject=f"News from {name}",
                 body=f"Hi there,\n\n{brief}\n\nReply if you have questions.\n\n{name}",
             )
@@ -596,45 +601,71 @@ class FakeBrain:
             check_confidence=approval.check_confidence,
         )
 
+    async def _newsletter_address(self, task: Task) -> str:
+        for lesson in await self._store.list_lessons(task.business_id, task.team_id):
+            if lesson.key == "newsletter_to":
+                match = EMAIL.search(lesson.text)
+                if match:
+                    return match.group(0).lower()
+        return "newsletter@example.com"
+
+    async def _act(self, task: Task, action: PlannedAction) -> ActionResult:
+        if self._tools is None:
+            action_id = _new_id()
+            if isinstance(action, PostSocial):
+                rkey = action_id.replace("-", "")[:13]
+                return ActionResult(
+                    action_id=action_id,
+                    ok=True,
+                    url=f"https://bsky.app/profile/demo.bsky.social/post/{rkey}",
+                    external_id=f"at://did:plc:demo/app.bsky.feed.post/{rkey}",
+                )
+            return ActionResult(action_id=action_id, ok=True)
+        if isinstance(action, PostSocial):
+            return await self._tools.post_social(task.business_id, action.text)
+        return await self._tools.send_email(
+            task.business_id, action.to, action.subject, action.body
+        )
+
     async def _execute(
         self, task: Task, action: PlannedAction, approval_id: str | None
-    ) -> ActionDone:
+    ) -> ActionDone | Error:
+        result = await self._act(task, action)
         now = self._clock()
-        action_id = _new_id()
         if isinstance(action, PostSocial):
-            rkey = action_id.replace("-", "")[:13]
-            summary = "Posted to Bluesky"
-            url = f"https://bsky.app/profile/demo.bsky.social/post/{rkey}"
-            external_id = f"at://did:plc:demo/app.bsky.feed.post/{rkey}"
-            undo_until = now + UNDO_WINDOW
+            summary = "Posted to Bluesky" if result.ok else "Couldn't post to Bluesky"
+            undo_until = now + UNDO_WINDOW if result.ok else None
         else:
-            summary = f"Sent the email to {action.to}"
-            url = external_id = undo_until = None
+            verb = "Sent" if result.ok else "Couldn't send"
+            summary = f"{verb} the email to {action.to}"
+            undo_until = None
         autonomous = approval_id is None
         await self._store.log_action(
             AuditEntry(
-                action_id=action_id,
+                action_id=result.action_id,
                 business_id=task.business_id,
                 team_id=task.team_id,
                 task_id=task.task_id,
                 tool=action.tool,
                 summary=summary,
-                result=ActionResult(
-                    action_id=action_id, ok=True, url=url, external_id=external_id
-                ),
+                result=result,
                 autonomous=autonomous,
                 approval_id=approval_id,
                 undo_until=undo_until,
                 at=now,
             )
         )
+        if not result.ok:
+            await self._save_status(task, TaskStatus.FAILED)
+            message = f"{summary}: {result.error}"
+            return Error(team_id=task.team_id, message=message, recoverable=True)
         await self._save_status(task, TaskStatus.DONE)
         return ActionDone(
-            action_id=action_id,
+            action_id=result.action_id,
             team_id=task.team_id,
             task_id=task.task_id,
             summary=summary,
-            url=url,
+            url=result.url,
             autonomous=autonomous,
             undo_until=undo_until,
         )
@@ -690,7 +721,10 @@ class FakeBrain:
                 text="Great, marked as done.",
             )
         else:
-            yield await self._execute(task, approval.planned_action, approval.approval_id)
+            outcome = await self._execute(task, approval.planned_action, approval.approval_id)
+            yield outcome
+            if isinstance(outcome, Error):
+                return
         trust = await self._trust(ctx, task.task_type)
         await self._set_streak(ctx, task.task_type, trust.approval_streak + 1)
         offer = await self._promotion_offer(ctx, task.task_type)
@@ -822,21 +856,28 @@ class FakeBrain:
         if message is not None:
             yield Error(team_id=entry.team_id, message=message, recoverable=True)
             return
-        delete_id = _new_id()
-        summary = "Deleted the Bluesky post"
+        if self._tools is None:
+            result = ActionResult(action_id=_new_id(), ok=True)
+        else:
+            result = await self._tools.delete_social(business_id, entry.result.external_id or "")
+        summary = "Deleted the Bluesky post" if result.ok else "Couldn't delete the Bluesky post"
         await self._store.log_action(
             AuditEntry(
-                action_id=delete_id,
+                action_id=result.action_id,
                 business_id=business_id,
                 team_id=entry.team_id,
                 task_id=entry.task_id,
                 tool="delete_social",
                 summary=summary,
-                result=ActionResult(action_id=delete_id, ok=True),
+                result=result,
                 autonomous=False,
                 at=now,
             )
         )
+        if not result.ok:
+            message = f"{summary}: {result.error}"
+            yield Error(team_id=entry.team_id, message=message, recoverable=True)
+            return
         await self._store.log_action(entry.model_copy(update={"undone_at": now}))
         ctx = await self._context(business_id, entry.team_id)
         task = await self._store.get_task(entry.task_id)

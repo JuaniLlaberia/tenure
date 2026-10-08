@@ -136,6 +136,12 @@ class TelegramChat:
         )
         return topic.message_thread_id
 
+    async def delete_topic(self, chat_id: int, thread_id: int) -> None:
+        await _retry(
+            lambda: self._bot.delete_forum_topic(chat_id=chat_id, message_thread_id=thread_id),
+            repeatable=True,
+        )
+
     async def pin(self, chat_id: int, message_id: int) -> None:
         await _retry(
             lambda: self._bot.pin_chat_message(

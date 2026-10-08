@@ -303,3 +303,9 @@ async def test_threshold_stays_within_bounds(client, flows, chat):
     for value in (0, 21):
         body = {"team_id": team_id, "promote_after": value}
         assert (await client.post(f"/b/{token}/api/trust/threshold", json=body)).status_code == 422
+
+async def test_dashboard_refuses_a_second_team_of_the_same_kind(client, flows, chat, store):
+    token, _ = await setup(flows, chat, client)
+    response = await client.post(f"/b/{token}/api/hire", json={"template": "marketing"})
+    assert response.status_code == 409
+    assert "already have a Marketing team" in response.json()["message"]

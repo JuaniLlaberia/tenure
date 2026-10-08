@@ -56,6 +56,12 @@ class LessonCard(Card):
     persona: Persona
 
 @dataclass
+class ReplaceCard(Card):
+    business_id: str
+    template: str
+    name: str
+
+@dataclass
 class Pending:
     kind: Literal["edit", "reason"]
     approval_id: str
@@ -72,6 +78,7 @@ class AppState:
     offers: dict[str, OfferCard] = field(default_factory=dict)
     lessons: dict[str, LessonCard] = field(default_factory=dict)
     hire_cards: dict[tuple[int, int], Card] = field(default_factory=dict)
+    replacements: dict[str, ReplaceCard] = field(default_factory=dict)
     pending: dict[Where, Pending] = field(default_factory=dict)
     status: dict[Where, int] = field(default_factory=dict)
     handled: set[tuple[int, int]] = field(default_factory=set)

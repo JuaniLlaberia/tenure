@@ -314,3 +314,40 @@ async def test_dashboard_lists_are_newest_first(store):
         mine.lesson_id,
         shared.lesson_id,
     ]
+
+async def test_delete_team_removes_its_records_but_keeps_the_audit_log(store):
+    business_id, (team_id, other_team) = await business(store, teams=2)
+    for current in (team_id, other_team):
+        await store.save_team(
+            Team(team_id=current, business_id=business_id, template="marketing",
+                 display_name="Marketing", created_at=NOW)
+        )
+        await store.set_trust(
+            Trust(team_id=current, task_type="social_post",
+                  level=AutonomyLevel.ACT_AFTER_APPROVAL, updated_at=NOW)
+        )
+    task = Task(task_id=new_id(), business_id=business_id, team_id=team_id,
+                task_type="social_post", title="t", brief="b", status=TaskStatus.DONE,
+                steps=["writer"], created_at=NOW, updated_at=NOW)
+    await store.save_task(task)
+    draft = approval(business_id, team_id)
+    await store.save_approval(draft)
+    team_lesson = lesson(business_id, team_id)
+    shared = lesson(business_id)
+    await store.save_lesson(team_lesson)
+    await store.save_lesson(shared)
+    action_id = new_id()
+    await store.log_action(
+        AuditEntry(action_id=action_id, business_id=business_id, team_id=team_id,
+                   task_id=task.task_id, tool="send_email", summary="Sent",
+                   result=ActionResult(action_id=action_id, ok=True), autonomous=False, at=NOW)
+    )
+
+    await store.delete_team(team_id)
+    assert await store.get_team(team_id) is None
+    assert await store.get_trust(team_id, "social_post") is None
+    assert await store.get_task(task.task_id) is None
+    assert await store.get_approval(draft.approval_id) is None
+    assert [x.lesson_id for x in await store.list_all_lessons(business_id)] == [shared.lesson_id]
+    assert await store.get_action(action_id) is not None
+    assert await store.get_team(other_team) is not None

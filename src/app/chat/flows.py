@@ -23,6 +23,7 @@ from app.chat.state import (
     LessonCard,
     OfferCard,
     Pending,
+    ReplaceCard,
 )
 from app.store.base import AppStore, TelegramTopic
 from app.store.memory import InMemoryStore
@@ -44,7 +45,9 @@ from contract import (
     PromotionOffer,
     PromotionResponse,
     Say,
+    Team,
     TeamHired,
+    TemplateInfo,
 )
 
 logger = logging.getLogger(__name__)
@@ -91,6 +94,7 @@ class Flows:
         self._brain = brain
         self._dashboard_url = dashboard_url.rstrip("/")
         self._deciding: set[str] = set()
+        self._hiring: set[tuple[str, str]] = set()
         self._password_ttl = password_ttl
         self._password_messages: dict[int, int] = {}
         self._timers: set[asyncio.Task] = set()
@@ -115,6 +119,8 @@ class Flows:
             ui.PROMOTE_YES: self._tap_promote_yes,
             ui.PROMOTE_NO: self._tap_promote_no,
             ui.FORGET: self._tap_forget,
+            ui.REPLACE: self._tap_replace,
+            ui.KEEP: self._tap_keep,
         }
 
     async def drain(self) -> None:
@@ -147,9 +153,9 @@ class Flows:
         if business_id is None:
             return
         if name:
-            template = name.strip().lower()
-            hire = partial(self._brain.hire_team, business_id, template)
-            self._spawn(chat_id, None, thread_id, hire)
+            outcome = await self._request_hire(chat_id, thread_id, business_id, name)
+            if outcome == "busy":
+                await self._chat.send(chat_id, thread_id, ui.ALREADY_HIRING)
             return
         await self._send_hire_card(chat_id, thread_id, ui.PICK_TEAM)
 
@@ -221,9 +227,96 @@ class Flows:
 
     async def hire_from_dashboard(self, business_id: str, template: str) -> None:
         chat_id = self._chat_for(business_id)
-        if template not in {t.name for t in self._brain.list_templates()}:
+        info = self._template(template)
+        if info is None:
             raise Refused(f"There's no '{template}' team to hire.")
-        self._spawn(chat_id, None, None, partial(self._brain.hire_team, business_id, template))
+        if await self._hired(business_id, template):
+            raise Refused(
+                f"You already have a {info.display_name} team. To start over, send "
+                f"/hire {template} in Telegram and choose Replace team."
+            )
+        if not self._start_hire(chat_id, None, business_id, template, []):
+            raise Refused(ui.ALREADY_HIRING)
+
+    def _template(self, name: str) -> TemplateInfo | None:
+        return next((t for t in self._brain.list_templates() if t.name == name), None)
+
+    async def _hired(self, business_id: str, template: str) -> list[Team]:
+        teams = await self._store.list_teams(business_id)
+        return [team for team in teams if team.template == template]
+
+    async def _request_hire(
+        self, chat_id: int, thread_id: int | None, business_id: str, name: str
+    ) -> str:
+        """
+        Hires, or asks to replace a team the business already has. Returns
+        "hiring", "asked" or "busy".
+        """
+        template = name.strip().lower()
+        info = self._template(template)
+        if info is not None and await self._hired(business_id, template):
+            await self._send_replace_card(chat_id, thread_id, business_id, info)
+            return "asked"
+        if not self._start_hire(chat_id, thread_id, business_id, template, []):
+            return "busy"
+        return "hiring"
+
+    def _start_hire(
+        self,
+        chat_id: int,
+        thread_id: int | None,
+        business_id: str,
+        template: str,
+        replace: list[Team],
+    ) -> bool:
+        key = (business_id, template)
+        if key in self._hiring:
+            return False
+        self._hiring.add(key)
+        self._track(self._hire(chat_id, thread_id, business_id, template, replace))
+        return True
+
+    async def _hire(
+        self,
+        chat_id: int,
+        thread_id: int | None,
+        business_id: str,
+        template: str,
+        replace: list[Team],
+    ) -> None:
+        try:
+            for team in replace:
+                await self._fire(chat_id, business_id, team.team_id)
+            hire = partial(self._brain.hire_team, business_id, template)
+            await self._call(chat_id, None, thread_id, hire)
+        finally:
+            self._hiring.discard((business_id, template))
+
+    async def _fire(self, chat_id: int, business_id: str, team_id: str) -> None:
+        async with self._locks[self._key(business_id, team_id)]:
+            thread_id = self._state.team_threads.pop(team_id, None)
+            self._state.team_names.pop(team_id, None)
+            if thread_id is not None:
+                self._state.topics.pop((chat_id, thread_id), None)
+                self._state.pending.pop((chat_id, thread_id), None)
+                self._state.status.pop((chat_id, thread_id), None)
+                try:
+                    await self._chat.delete_topic(chat_id, thread_id)
+                except Exception:
+                    logger.warning("Deleting the old team's topic failed", exc_info=True)
+            await self._store.delete_team(team_id)
+
+    async def _send_replace_card(
+        self, chat_id: int, thread_id: int | None, business_id: str, info: TemplateInfo
+    ) -> None:
+        key = _short_id()
+        text = ui.replace_text(info)
+        keyboard = ui.replace_keyboard(key)
+        message_id = await self._chat.send(chat_id, thread_id, text, keyboard)
+        self._state.replacements[key] = ReplaceCard(
+            chat_id, thread_id, message_id, text, keyboard,
+            business_id=business_id, template=info.name, name=info.display_name,
+        )
 
     async def decide_from_dashboard(
         self, business_id: str, approval_id: str, approve: bool, reason: str | None = None
@@ -685,12 +778,32 @@ class Flows:
         card = self._state.hire_cards.pop((chat_id, message_id), None)
         if card is None:
             return ui.GONE
-        names = {t.name: t.display_name for t in self._brain.list_templates()}
-        await self._close(card, ui.hiring(names.get(template, template)))
+        info = self._template(template)
         business_id = self._state.businesses[chat_id]
-        self._spawn(
-            chat_id, None, card.thread_id, lambda: self._brain.hire_team(business_id, template)
-        )
+        outcome = await self._request_hire(chat_id, card.thread_id, business_id, template)
+        if outcome == "busy":
+            self._state.hire_cards[(chat_id, message_id)] = card
+            return ui.ALREADY_HIRING
+        footer = ui.hiring(info.display_name if info else template) if outcome == "hiring" else None
+        await self._close(card, footer)
+        return None
+
+    async def _tap_replace(self, chat_id: int, message_id: int, key: str) -> str | None:
+        card = self._state.replacements.pop(key, None)
+        if card is None:
+            return ui.GONE
+        old = await self._hired(card.business_id, card.template)
+        if not self._start_hire(card.chat_id, card.thread_id, card.business_id, card.template, old):
+            self._state.replacements[key] = card
+            return ui.ALREADY_HIRING
+        await self._close(card, ui.replacing(card.name))
+        return None
+
+    async def _tap_keep(self, chat_id: int, message_id: int, key: str) -> str | None:
+        card = self._state.replacements.pop(key, None)
+        if card is None:
+            return ui.GONE
+        await self._close(card, ui.kept(card.name))
         return None
 
     async def _tap_promote_yes(self, chat_id: int, message_id: int, key: str) -> str | None:

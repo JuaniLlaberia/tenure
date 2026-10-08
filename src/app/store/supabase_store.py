@@ -151,6 +151,11 @@ class SupabaseStore:
         )
         return [Lesson.model_validate(row) for row in (await query.execute()).data]
 
+    async def delete_team(self, team_id: str) -> None:
+        db = await self._db()
+        for table in ("telegram_topics", "trust", "approvals", "tasks", "lessons", "teams"):
+            await db.table(table).delete().eq("team_id", team_id).execute()
+
     async def get_profile(self, business_id: str) -> BusinessProfile | None:
         return await self._get("business_profiles", BusinessProfile, business_id=business_id)
 

@@ -15,6 +15,7 @@ from app.fake_brain import FakeBrain
 from app.store.base import AppStore
 from app.store.memory import InMemoryStore
 from app.store.supabase_store import SupabaseStore
+from app.tools.real import RealTools
 from app.web.api import create_api
 
 logger = logging.getLogger(__name__)
@@ -42,12 +43,14 @@ async def run(token: str) -> None:
     port = int(os.environ.get("PORT", "8000"))
     dashboard_url = os.environ.get("DASHBOARD_URL", f"http://localhost:{port}")
     store = make_store()
-    brain = FakeBrain(store, delay=0.8)
+    tools = RealTools.from_env()
+    brain = FakeBrain(store, tools=tools, delay=0.8)
     application, flows = build_application(token, brain, store, dashboard_url)
     api = create_api(flows, store, brain)
     server = uvicorn.Server(uvicorn.Config(api, host=host, port=port, log_level="warning"))
     async with application:
         await flows.load()
+        await tools.check()
         await application.start()
         await application.bot.set_my_commands(COMMANDS)
         await application.updater.start_polling(allowed_updates=Update.ALL_TYPES)

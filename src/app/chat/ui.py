@@ -37,6 +37,8 @@ DROP = "rd"
 UNDO = "un"
 ANSWER = "qr"
 HIRE = "hi"
+REPLACE = "rp"
+KEEP = "rk"
 PROMOTE_YES = "py"
 PROMOTE_NO = "pn"
 FORGET = "fg"
@@ -77,6 +79,7 @@ GONE = "This is no longer available."
 UNDO_CLOSED = "The 10-minute undo window has closed."
 BROKEN = "⚠️ Something went wrong on my side. Please try again."
 SETUP_DONE = "<b>Setup done.</b> Pick your first team:"
+ALREADY_HIRING = "That team is already being hired."
 PICK_TEAM = "Which team do you want to hire?"
 
 APPROVED = "✓ Approved"
@@ -242,6 +245,23 @@ def hire_keyboard(templates: list[TemplateInfo]) -> Keyboard:
 
 def hiring(name: str) -> str:
     return f"→ Hiring {name}"
+
+def replace_text(template: TemplateInfo) -> str:
+    people = join_names([p.name for p in template.personas])
+    return (
+        f"You already have a <b>{text(template.display_name)}</b> team ({text(people)}). "
+        "Replace it?\n\nThe old team's topic, drafts and what it learned about you will be "
+        "deleted. Business-wide lessons and the activity log stay."
+    )
+
+def replace_keyboard(key: str) -> Keyboard:
+    return [[Button("Replace team", f"{REPLACE}:{key}"), Button("Cancel", f"{KEEP}:{key}")]]
+
+def replacing(name: str) -> str:
+    return f"→ Replacing {name}"
+
+def kept(name: str) -> str:
+    return f"Kept your current {name} team."
 
 DASHBOARD_STOPPED = (
     "Dashboard turned off. The old link and password no longer work. "

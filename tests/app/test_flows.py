@@ -108,7 +108,7 @@ async def test_request_renders_two_drafts_and_clears_status(flows, chat):
     post, email = await drafts(flows, chat, thread_id)
     assert "Bluesky post" in post.text and "check 90%" in post.text
     assert post.data("Approve").startswith("ap:")
-    assert "Email to newsletter@example.com" in email.text
+    assert "Email to list@example.com" in email.text
     assert not any("is writing" in m.text for m in chat.messages.values())
     assert chat.deleted
     assert chat.typing_calls > 0
@@ -249,7 +249,7 @@ async def test_one_failed_message_does_not_drop_the_rest(flows, chat):
 
     chat.send = flaky
     await say(flows, REQUEST, thread_id)
-    assert "Email to newsletter@example.com" in chat.find("Draft for approval").text
+    assert "Email to list@example.com" in chat.find("Draft for approval").text
     assert chat.last(thread_id).text == ui.BROKEN
 
 async def test_restart_restores_businesses_and_topics(chat, clock):
@@ -266,3 +266,44 @@ async def test_restart_restores_businesses_and_topics(chat, clock):
     post, _ = await drafts(restarted, chat, thread_id)
     await tap(restarted, post, "Approve")
     assert chat.find("Posted to Bluesky")
+
+async def test_hiring_a_team_twice_asks_to_replace_it(chat, clock):
+    store = InMemoryStore()
+    flows = Flows(FakeBrain(store, clock=clock), chat, store=store, debounce=0, clock=clock)
+    old_thread = await marketing_team(flows, chat)
+    business_id = (await store.list_businesses())[CHAT]
+    (old,) = await store.list_teams(business_id)
+
+    await flows.on_hire(CHAT, None, "Marketing")
+    await flows.drain()
+    card = chat.last(None)
+    assert "You already have a <b>Marketing</b> team (Maya, Leo and Sam)" in card.text
+    assert chat.topics == {"Marketing": old_thread}
+
+    await tap(flows, card, "Cancel")
+    assert card.text.endswith("<i>Kept your current Marketing team.</i>")
+    assert [t.team_id for t in await store.list_teams(business_id)] == [old.team_id]
+
+    await flows.on_hire(CHAT, None, "marketing")
+    await flows.drain()
+    await tap(flows, chat.last(None), "Replace team")
+    assert chat.deleted_topics == [old_thread]
+    (new,) = await store.list_teams(business_id)
+    assert new.team_id != old.team_id
+    assert await store.get_trust(old.team_id, "social_post") is None
+    assert chat.topics["Marketing"] != old_thread
+    assert "Which channels" in chat.last(chat.topics["Marketing"]).text
+    await say(flows, "hello", old_thread)
+    assert chat.last(old_thread).text == ui.NOT_A_TEAM
+
+async def test_quick_double_hire_only_hires_once(chat, clock):
+    store = InMemoryStore()
+    flows = Flows(FakeBrain(store, clock=clock), chat, store=store, debounce=0, clock=clock)
+    await setup_business(flows)
+    await flows.on_hire(CHAT, None, "marketing")
+    await flows.on_hire(CHAT, None, "marketing")
+    await flows.drain()
+    assert ui.ALREADY_HIRING in [m.text for m in chat.thread(None)]
+    assert len(chat.topics) == 1
+    business_id = (await store.list_businesses())[CHAT]
+    assert len(await store.list_teams(business_id)) == 1

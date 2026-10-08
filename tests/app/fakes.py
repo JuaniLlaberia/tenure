@@ -25,6 +25,7 @@ class FakeChat:
         self.deleted: list[int] = []
         self.topics: dict[str, int] = {}
         self.pinned: list[int] = []
+        self.deleted_topics: list[int] = []
         self.typing_calls = 0
 
     async def send(self, chat_id, thread_id, text, keyboard=None) -> int:
@@ -41,8 +42,15 @@ class FakeChat:
         self.deleted.append(message_id)
 
     async def create_topic(self, chat_id, name) -> int:
-        self.topics[name] = 100 + len(self.topics)
+        self.created_topics = getattr(self, "created_topics", 0) + 1
+        self.topics[name] = 100 + self.created_topics
         return self.topics[name]
+
+    async def delete_topic(self, chat_id, thread_id) -> None:
+        self.deleted_topics.append(thread_id)
+        self.topics = {name: t for name, t in self.topics.items() if t != thread_id}
+        for message_id in [m for m, sent in self.messages.items() if sent.thread_id == thread_id]:
+            del self.messages[message_id]
 
     async def pin(self, chat_id, message_id) -> None:
         self.pinned.append(message_id)
