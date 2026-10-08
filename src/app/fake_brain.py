@@ -269,7 +269,11 @@ class FakeBrain:
         if trust is None:
             level = ctx.template.task_types[task_type].start_level
             trust = Trust(
-                team_id=ctx.team_id, task_type=task_type, level=level, updated_at=self._clock()
+                team_id=ctx.team_id,
+                task_type=task_type,
+                level=level,
+                promote_after=self._promotion_streak,
+                updated_at=self._clock(),
             )
             await self._store.set_trust(trust)
         return trust
@@ -366,7 +370,11 @@ class FakeBrain:
         await self._store.save_team(team)
         for task_type, spec in template.task_types.items():
             trust = Trust(
-                team_id=team.team_id, task_type=task_type, level=spec.start_level, updated_at=now
+                team_id=team.team_id,
+                task_type=task_type,
+                level=spec.start_level,
+                promote_after=self._promotion_streak,
+                updated_at=now,
             )
             await self._store.set_trust(trust)
         ctx = _Ctx(team=team, template=template, thread=_Thread())
@@ -693,7 +701,7 @@ class FakeBrain:
         trust = await self._trust(ctx, task_type)
         cap = ctx.template.task_types[task_type].max_level
         proposed = _next_level(trust.level, cap)
-        if trust.approval_streak < self._promotion_streak or proposed is None:
+        if trust.approval_streak < trust.promote_after or proposed is None:
             return None
         return PromotionOffer(
             team_id=ctx.team_id,

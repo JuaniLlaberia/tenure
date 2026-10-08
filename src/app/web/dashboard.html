@@ -99,7 +99,7 @@ h1, h2, h3 { font-family: var(--font-display); margin: 0; text-wrap: balance; }
 .pips i.f { background: var(--accent); }
 .tt-actions { display: flex; flex-wrap: wrap; gap: 6px; justify-content: flex-end; align-items: center; font-size: 12.5px; }
 .threshold { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 12px; font-size: 13px; color: var(--muted); }
-.stepper { display: inline-flex; align-items: center; border: 1px solid var(--line); border-radius: 8px; overflow: hidden; opacity: 0.55; }
+.stepper { display: inline-flex; align-items: center; border: 1px solid var(--line); border-radius: 8px; overflow: hidden; }
 .stepper button { border: 0; background: var(--sunk); width: 28px; height: 28px; }
 .stepper output { min-width: 34px; text-align: center; font-family: var(--font-mono); color: var(--ink); }
 
@@ -316,15 +316,18 @@ function renderTeams() {
     $("teams").innerHTML = `<p class="empty">No teams yet. Use “Hire a team” to get started.</p>`;
     return;
   }
-  const threshold = `
+  const threshold = (team) => {
+    const n = team.promote_after;
+    const busy = ui.busy.has(`threshold:${team.team_id}`) ? "disabled" : "";
+    return `
     <div class="threshold">
       <span>Offer more autonomy after</span>
-      <span class="stepper" title="Coming soon: waiting for a contract change">
-        <button type="button" disabled aria-label="Fewer approvals">−</button><output>${data.promotion_streak}</output><button type="button" disabled aria-label="More approvals">+</button>
+      <span class="stepper">
+        <button type="button" data-act="threshold" data-team="${esc(team.team_id)}" data-value="${n - 1}" aria-label="Fewer approvals" ${n <= 1 || busy ? "disabled" : ""}>−</button><output>${n}</output><button type="button" data-act="threshold" data-team="${esc(team.team_id)}" data-value="${n + 1}" aria-label="More approvals" ${n >= data.promote_after_max || busy ? "disabled" : ""}>+</button>
       </span>
-      <span>approvals in a row without edits</span>
-      <span class="badge">Coming soon</span>
+      <span>approval${n === 1 ? "" : "s"} in a row without edits</span>
     </div>`;
+  };
   $("teams").innerHTML = data.teams.map((team) => `
     <div class="team">
       <div class="team-head">
@@ -333,14 +336,14 @@ function renderTeams() {
           <div class="person"><span class="ava s${i % 3}">${esc(p.name[0])}</span><div>${esc(p.name)}<small>${esc(p.role)}</small></div></div>`).join("")}</div>
       </div>
       <div class="trust">${team.trust.map((t) => trustRow(team, t)).join("")}</div>
-      ${threshold}
+      ${threshold(team)}
     </div>`).join("");
 }
 
 function trustRow(team, t) {
   const key = `${team.team_id}:${t.task_type}`;
   const rungs = data.levels.map((name, n) => `<div class="rung ${n <= t.level ? "on" : ""} ${n === t.level ? "now" : ""}"><div class="bar"></div><span>${esc(name)}</span></div>`).join("");
-  const max = data.promotion_streak;
+  const max = t.promote_after;
   const filled = Math.min(t.streak, max);
   const pips = Array.from({ length: max }, (_, n) => `<i class="${n < filled ? "f" : ""}"></i>`).join("");
   const lead = team.people[0] ? team.people[0].name : "The team";
@@ -511,6 +514,7 @@ document.addEventListener("click", (event) => {
     case "lower-no": ui.lowering = null; render(); break;
     case "lower-yes": act(`${el.dataset.team}:${el.dataset.type}`, "/trust/lower", { team_id: el.dataset.team, task_type: el.dataset.type }); break;
     case "forget": act(id, `/lessons/${id}/forget`); break;
+    case "threshold": act(`threshold:${el.dataset.team}`, "/trust/threshold", { team_id: el.dataset.team, promote_after: Number(el.dataset.value) }); break;
     case "hire": $("hire").close(); act("hire", "/hire", { template: id }); break;
   }
 });

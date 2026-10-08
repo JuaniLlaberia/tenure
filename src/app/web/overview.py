@@ -10,7 +10,7 @@ from app.store.base import AppStore
 from contract import Approval, AuditEntry, AutonomyLevel, Brain, Lesson, Task, Team, TemplateInfo
 
 WEEK = timedelta(days=7)
-PROMOTION_STREAK = 5
+PROMOTE_AFTER_MAX = 20
 COST_PER_MILLION_TOKENS = 9.0
 LEVELS = list(AutonomyLevel)
 LEVEL_NAMES = ["Drafts only", "Asks first", "Acts, then tells you", "On its own"]
@@ -55,7 +55,7 @@ async def build_overview(
         "activity": [_action(a, titles, now) for a in actions if a.tool != "delete_social"],
         "templates": [_template(t, teams) for t in templates.values()],
         "levels": LEVEL_NAMES,
-        "promotion_streak": PROMOTION_STREAK,
+        "promote_after_max": PROMOTE_AFTER_MAX,
     }
 
 def _stats(
@@ -85,12 +85,14 @@ async def _team(store: AppStore, team: Team, template: TemplateInfo | None) -> d
         "hired_at": team.created_at,
         "onboarded": team.onboarded,
         "people": [p.model_dump() for p in template.personas] if template else [],
+        "promote_after": max((t.promote_after for t in trust), default=5),
         "trust": [
             {
                 "task_type": t.task_type,
                 "label": ui.task_title(t.task_type),
                 "level": LEVELS.index(t.level),
                 "streak": t.approval_streak,
+                "promote_after": t.promote_after,
             }
             for t in trust
         ],

@@ -144,9 +144,10 @@ async def test_trust_upserts_per_task_type(store):
         updated_at=NOW,
     )
     await store.set_trust(trust)
-    await store.set_trust(trust.model_copy(update={"approval_streak": 3}))
+    await store.set_trust(trust.model_copy(update={"approval_streak": 3, "promote_after": 2}))
     saved = await store.get_trust(team_id, "social_post")
     assert saved.approval_streak == 3
+    assert saved.promote_after == 2
     assert saved.level is AutonomyLevel.ACT_AFTER_APPROVAL
     assert await store.get_trust(team_id, "newsletter") is None
 

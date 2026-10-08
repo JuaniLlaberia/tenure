@@ -50,6 +50,7 @@ create table if not exists trust (
     updated_at timestamptz not null,
     primary key (team_id, task_type)
 );
+alter table trust add column if not exists promote_after integer not null default 5;
 
 create table if not exists tasks (
     task_id uuid primary key,

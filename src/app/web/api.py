@@ -13,12 +13,12 @@ from typing import Any
 
 from fastapi import FastAPI, HTTPException, Request, Response
 from fastapi.responses import HTMLResponse, JSONResponse
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 from app.chat.flows import Flows, Refused
 from app.store.base import AppStore
 from app.web import auth
-from app.web.overview import build_overview
+from app.web.overview import PROMOTE_AFTER_MAX, build_overview
 from contract import AutonomyLevel, Brain
 
 PAGE = Path(__file__).with_name("dashboard.html")
@@ -39,6 +39,10 @@ class Reject(BaseModel):
 class Lower(BaseModel):
     team_id: str
     task_type: str
+
+class Threshold(BaseModel):
+    team_id: str
+    promote_after: int = Field(ge=1, le=PROMOTE_AFTER_MAX)
 
 def _utcnow() -> datetime:
     return datetime.now(UTC)
@@ -156,6 +160,19 @@ def create_api(
         update = {"level": LEVELS[index - 1], "approval_streak": 0, "updated_at": clock()}
         await store.set_trust(trust.model_copy(update=update))
         return {"message": "Lowered. The team will ask more often from now on."}
+
+    @api.post("/b/{token}/api/trust/threshold")
+    async def threshold(token: str, body: Threshold, request: Request) -> dict[str, str]:
+        business_id = await business(request, token)
+        team = await store.get_team(body.team_id)
+        if team is None or team.business_id != business_id:
+            raise Refused("I can't find that team.")
+        for trust in await store.list_trust(body.team_id):
+            update = {"promote_after": body.promote_after, "updated_at": clock()}
+            await store.set_trust(trust.model_copy(update=update))
+        n = body.promote_after
+        approvals = "approval" if n == 1 else "approvals"
+        return {"message": f"The team asks for more autonomy after {n} {approvals}."}
 
     @api.post("/b/{token}/api/lessons/{lesson_id}/forget")
     async def forget(token: str, lesson_id: str, request: Request) -> dict[str, str]:

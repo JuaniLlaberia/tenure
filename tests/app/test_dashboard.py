@@ -280,3 +280,26 @@ async def test_dashboard_stop_turns_the_link_off(client, flows, chat):
     new_token, password = await open_dashboard(flows, chat)
     assert new_token != token
     assert (await login(client, new_token, password)).status_code == 200
+
+async def test_threshold_sets_every_task_type_of_the_team(client, flows, chat, store):
+    token, thread_id = await setup(flows, chat, client)
+    team = (await overview(client, token))["teams"][0]
+    assert team["promote_after"] == 5
+    body = {"team_id": team["team_id"], "promote_after": 1}
+    response = await client.post(f"/b/{token}/api/trust/threshold", json=body)
+    assert response.status_code == 200
+    trust = (await overview(client, token))["teams"][0]["trust"]
+    assert {t["promote_after"] for t in trust} == {1}
+
+    await say(flows, REQUEST, thread_id)
+    post = next(d for d in (await overview(client, token))["drafts"] if d["type"] == "Bluesky post")
+    await client.post(f"/b/{token}/api/approvals/{post['approval_id']}/approve")
+    await flows.drain()
+    assert chat.find("Can I take the next step?")
+
+async def test_threshold_stays_within_bounds(client, flows, chat):
+    token, _ = await setup(flows, chat, client)
+    team_id = (await overview(client, token))["teams"][0]["team_id"]
+    for value in (0, 21):
+        body = {"team_id": team_id, "promote_after": value}
+        assert (await client.post(f"/b/{token}/api/trust/threshold", json=body)).status_code == 422
