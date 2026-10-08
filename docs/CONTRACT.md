@@ -1,4 +1,4 @@
-# Brain ↔ App Contract (v0.2 draft)
+# Brain ↔ App Contract (v0.3 draft)
 
 This is the agreement between the agent brain (`src/brain/`, owner: Juan) and the app (`src/app/`, owner: Mark).
 If both sides respect it, each can be built and tested alone, and they plug together at merge points.
@@ -9,6 +9,12 @@ If both sides respect it, each can be built and tested alone, and they plug toge
 Both change together: a change to one without the other is a bug, and `tests/contract/` should catch the shape side.
 
 ## 0. Changelog
+
+**v0.3 (Oct 8), proposed by Mark, needs Juan's OK**
+
+| # | Change | Why |
+| --- | --- | --- |
+| 1 | `Trust` gains `promote_after` (default 5, minimum 1); the promotion rule uses it instead of a fixed 5 (§8) | The founder sets how many clean approvals earn a promotion offer, from the dashboard |
 
 **v0.2 (Oct 5), proposed by Juan, needs Mark's OK**
 
@@ -288,14 +294,16 @@ Resolving an approval that isn't `pending` yields a recoverable `Error`.
 | `task_type` | `str` | Task type |
 | `level` | `AutonomyLevel` | Current level |
 | `approval_streak` | `int` | Approvals in a row without edits |
+| `promote_after` | `int` | Clean approvals in a row before a promotion offer. Default 5, minimum 1; set by the founder on the dashboard |
 | `updated_at` | `datetime` | Last change |
 
 Rules (the brain owns the logic, the Store keeps the state):
 
-- The brain creates one `Trust` row per task type on hire, at the template's `start_level`, streak 0.
+- The brain creates one `Trust` row per task type on hire, at the template's `start_level`, streak 0, `promote_after` at its default.
 - Approve without edits → streak + 1. Edit, reject or undo → streak 0. Actions taken without approval don't change the streak.
-- **Promotion:** the streak reaches 5, the last 5 approvals all had `check_confidence ≥ 0.8`, and the level is below the template's cap → emit `PromotionOffer` for the next level up. Accept → level + 1, streak 0. Decline → streak 0 (no re-offer on the next approval).
+- **Promotion:** the streak reaches `promote_after`, the last `promote_after` approvals (`recent_approvals(limit=promote_after)`) all had `check_confidence ≥ 0.8`, and the level is below the template's cap → emit `PromotionOffer` for the next level up. Accept → level + 1, streak 0. Decline → streak 0 (no re-offer on the next approval).
 - **Demotion:** the founder can demote anytime from the dashboard. The app writes the level directly (same as `Store.set_trust`) and resets the streak. The brain reads trust fresh every time; it never caches it.
+- **Promotion threshold:** the founder can change `promote_after` from the dashboard. The app writes it through `Store.set_trust` and leaves the level and streak as they are.
 - Finance never moves money at any level: no payment tool exists in `Tools`, and none may be added.
 
 ## 9. Tools (`app_side/tools.py`) and actions (`models/actions.py`)
