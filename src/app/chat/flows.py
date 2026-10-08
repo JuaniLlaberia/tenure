@@ -24,6 +24,8 @@ from app.chat.state import (
     OfferCard,
     Pending,
 )
+from app.store.base import AppStore, TelegramTopic
+from app.store.memory import InMemoryStore
 from contract import (
     ActionDone,
     ActionUndone,
@@ -41,7 +43,6 @@ from contract import (
     PromotionOffer,
     PromotionResponse,
     Say,
-    Store,
     TeamHired,
 )
 
@@ -74,7 +75,7 @@ class Flows:
         brain: Brain,
         chat: Chat,
         state: AppState | None = None,
-        store: Store | None = None,
+        store: AppStore | None = None,
         debounce: float = 2.5,
         typing_every: float = 4.0,
         clock: Callable[[], datetime] = _utcnow,
@@ -82,7 +83,7 @@ class Flows:
         self._brain = brain
         self._chat = chat
         self._state = state or AppState()
-        self._store = store
+        self._store = store or InMemoryStore()
         self._debounce = debounce
         self._typing_every = typing_every
         self._clock = clock
@@ -110,11 +111,22 @@ class Flows:
         while self._tasks:
             await asyncio.gather(*list(self._tasks), return_exceptions=True)
 
+    async def load(self) -> None:
+        """
+        Restores businesses and team topics from the store, so a restart keeps working.
+        """
+        self._state.businesses.update(await self._store.list_businesses())
+        for topic in await self._store.list_topics():
+            self._state.add_team(topic.chat_id, topic.thread_id, topic.team_id, topic.name)
+
     async def on_start(self, chat_id: int, thread_id: int | None, is_forum: bool) -> None:
         if not is_forum:
             await self._chat.send(chat_id, thread_id, ui.NEEDS_TOPICS)
             return
-        business_id = self._state.businesses.get(chat_id) or self._state.add_business(chat_id)
+        business_id = self._state.businesses.get(chat_id)
+        if business_id is None:
+            business_id = await self._store.create_business(chat_id)
+            self._state.businesses[chat_id] = business_id
         self._spawn(chat_id, None, None, lambda: self._brain.start_onboarding(business_id))
 
     async def on_hire(self, chat_id: int, thread_id: int | None, name: str | None) -> None:
@@ -312,7 +324,7 @@ class Flows:
             case LessonLearned():
                 await self._render_lesson(chat_id, business_id, event)
             case TeamHired():
-                await self._render_hired(chat_id, event)
+                await self._render_hired(chat_id, business_id, event)
             case OnboardingComplete():
                 if event.scope == "business":
                     await self._send_hire_card(chat_id, None, ui.SETUP_DONE)
@@ -393,9 +405,17 @@ class Flows:
             business_id=business_id, team_id=event.team_id, persona=event.persona,
         )
 
-    async def _render_hired(self, chat_id: int, event: TeamHired) -> None:
+    async def _render_hired(self, chat_id: int, business_id: str, event: TeamHired) -> None:
         thread_id = await self._chat.create_topic(chat_id, event.display_name)
         self._state.add_team(chat_id, thread_id, event.team_id, event.display_name)
+        topic = TelegramTopic(
+            team_id=event.team_id,
+            business_id=business_id,
+            chat_id=chat_id,
+            thread_id=thread_id,
+            name=event.display_name,
+        )
+        await self._store.save_topic(topic)
         roster_id = await self._chat.send(chat_id, thread_id, ui.roster_text(event))
         try:
             await self._chat.pin(chat_id, roster_id)
@@ -579,8 +599,7 @@ class Flows:
         if card is None:
             return ui.GONE
         await self._close(card, ui.forgotten(card.persona))
-        if self._store is not None:
-            for lesson in await self._store.list_lessons(card.business_id, card.team_id):
-                if lesson.lesson_id == lesson_id:
-                    await self._store.save_lesson(lesson.model_copy(update={"active": False}))
+        for lesson in await self._store.list_lessons(card.business_id, card.team_id):
+            if lesson.lesson_id == lesson_id:
+                await self._store.save_lesson(lesson.model_copy(update={"active": False}))
         return None

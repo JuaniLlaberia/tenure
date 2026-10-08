@@ -1,12 +1,11 @@
 """
-What the Telegram side remembers: group and topic mappings, and the messages
-it may edit later. In memory for now; the mappings move to Supabase with the Store.
+What the Telegram side remembers: group and topic mappings (loaded from and saved to
+the store) and the messages it may edit later (in memory only).
 """
 
 from dataclasses import dataclass, field
 from datetime import datetime
 from typing import Literal
-from uuid import uuid4
 
 from app.chat.port import Keyboard
 from contract import AutonomyLevel, Persona, PlannedAction
@@ -76,11 +75,6 @@ class AppState:
     pending: dict[Where, Pending] = field(default_factory=dict)
     status: dict[Where, int] = field(default_factory=dict)
     handled: set[tuple[int, int]] = field(default_factory=set)
-
-    def add_business(self, chat_id: int) -> str:
-        business_id = str(uuid4())
-        self.businesses[chat_id] = business_id
-        return business_id
 
     def add_team(self, chat_id: int, thread_id: int, team_id: str, name: str) -> None:
         self.topics[(chat_id, thread_id)] = team_id

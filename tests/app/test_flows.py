@@ -7,6 +7,7 @@ from app.chat import ui
 from app.chat.flows import Flows
 from app.chat.port import Keyboard
 from app.fake_brain import FakeBrain
+from app.store.memory import InMemoryStore
 from contract import IncomingMessage
 
 CHAT = -1001234567890
@@ -315,3 +316,16 @@ async def test_one_failed_message_does_not_drop_the_rest(flows, chat):
     await say(flows, REQUEST, thread_id)
     assert "Email to newsletter@example.com" in chat.find("Draft for approval").text
     assert chat.last(thread_id).text == ui.BROKEN
+
+async def test_restart_restores_businesses_and_topics(chat, clock):
+    store = InMemoryStore()
+    first = Flows(FakeBrain(clock=clock), chat, store=store, debounce=0, clock=clock)
+    thread_id = await marketing_team(first, chat)
+
+    restarted = Flows(FakeBrain(clock=clock), chat, store=store, debounce=0, clock=clock)
+    await restarted.load()
+    await restarted.on_start(CHAT, None, is_forum=True)
+    await restarted.drain()
+    assert list((await store.list_businesses()).values()) == [first._state.businesses[CHAT]]
+    await say(restarted, "hello there my friend", thread_id)
+    assert chat.last(thread_id).text != ui.NOT_A_TEAM

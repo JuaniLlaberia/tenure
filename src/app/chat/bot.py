@@ -31,6 +31,7 @@ from telegram.ext import (
 from app.chat import ui
 from app.chat.flows import Flows
 from app.chat.port import Keyboard
+from app.store.base import AppStore
 from contract import Brain
 
 logger = logging.getLogger(__name__)
@@ -139,7 +140,7 @@ class TelegramChat:
             chat_id=chat_id, action=ChatAction.TYPING, message_thread_id=thread_id
         )
 
-def build_application(token: str, brain: Brain) -> Application:
+def build_application(token: str, brain: Brain, store: AppStore) -> Application:
     application = (
         ApplicationBuilder()
         .token(token)
@@ -148,9 +149,10 @@ def build_application(token: str, brain: Brain) -> Application:
         .read_timeout(TIMEOUT)
         .write_timeout(TIMEOUT)
         .pool_timeout(TIMEOUT)
+        .post_init(lambda _: flows.load())
         .build()
     )
-    flows = Flows(brain, TelegramChat(application.bot))
+    flows = Flows(brain, TelegramChat(application.bot), store=store)
 
     async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         chat = update.effective_chat
