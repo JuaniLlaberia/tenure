@@ -1,4 +1,3 @@
-import secrets
 from typing import TypeVar
 from uuid import uuid4
 
@@ -37,7 +36,7 @@ class InMemoryStore:
         self._approvals: dict[str, Approval] = {}
         self._lessons: dict[str, Lesson] = {}
         self._actions: dict[str, AuditEntry] = {}
-        self._tokens: dict[str, str] = {}
+        self._dashboards: dict[str, tuple[str | None, str | None]] = {}
 
     async def create_business(self, chat_id: int) -> str:
         business_id = str(uuid4())
@@ -53,13 +52,19 @@ class InMemoryStore:
     async def list_topics(self) -> list[TelegramTopic]:
         return [_copy(topic) for topic in self._topics.values()]
 
-    async def dashboard_token(self, business_id: str) -> str:
-        if business_id not in self._tokens:
-            self._tokens[business_id] = secrets.token_urlsafe(18)
-        return self._tokens[business_id]
+    async def dashboard_token(self, business_id: str) -> str | None:
+        return self._dashboards.get(business_id, (None, None))[0]
 
-    async def business_for_token(self, token: str) -> str | None:
-        return next((b for b, t in self._tokens.items() if t == token), None)
+    async def set_dashboard(
+        self, business_id: str, token: str | None, password_hash: str | None
+    ) -> None:
+        self._dashboards[business_id] = (token, password_hash)
+
+    async def dashboard_access(self, token: str) -> tuple[str, str] | None:
+        for business_id, (known, password_hash) in self._dashboards.items():
+            if known == token and password_hash:
+                return business_id, password_hash
+        return None
 
     async def list_trust(self, team_id: str) -> list[Trust]:
         rows = [t for (team, _), t in self._trust.items() if team == team_id]

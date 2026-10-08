@@ -9,6 +9,7 @@ create table if not exists businesses (
 );
 
 alter table businesses add column if not exists dashboard_token text unique;
+alter table businesses add column if not exists dashboard_password_hash text;
 
 create table if not exists telegram_topics (
     team_id uuid primary key,

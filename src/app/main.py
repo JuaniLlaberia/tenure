@@ -19,6 +19,15 @@ from app.web.api import create_api
 
 logger = logging.getLogger(__name__)
 
+COMMANDS = [
+    ("start", "Set up your business"),
+    ("hire", "Hire a team, e.g. /hire marketing"),
+    ("dashboard", "Get the dashboard link and a new password"),
+    ("dashboard_stop", "Turn the dashboard off"),
+    ("cancel", "Stop an edit or a reason you started"),
+    ("help", "What the bot can do"),
+]
+
 def make_store() -> AppStore:
     url = os.environ.get("SUPABASE_URL")
     key = os.environ.get("SUPABASE_SERVICE_KEY")
@@ -40,6 +49,7 @@ async def run(token: str) -> None:
     async with application:
         await flows.load()
         await application.start()
+        await application.bot.set_my_commands(COMMANDS)
         await application.updater.start_polling(allowed_updates=Update.ALL_TYPES)
         logger.info("Bot polling; dashboard on %s", dashboard_url)
         try:

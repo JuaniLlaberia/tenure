@@ -6,6 +6,7 @@ class Button:
     text: str
     data: str | None = None
     url: str | None = None
+    copy: str | None = None
 
 Keyboard = list[list[Button]]
 

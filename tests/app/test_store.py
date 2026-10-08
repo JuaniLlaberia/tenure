@@ -252,13 +252,17 @@ async def test_returned_models_are_copies(store):
     loaded.active = False
     assert await store.list_lessons(business_id, team_id) != []
 
-async def test_dashboard_token_is_stable_and_resolves(store):
+async def test_dashboard_access_set_and_cleared(store):
     business_id, _ = await business(store)
-    token = await store.dashboard_token(business_id)
-    assert len(token) >= 20
+    assert await store.dashboard_token(business_id) is None
+    token = f"tok-{new_id()}"
+    await store.set_dashboard(business_id, token, "scrypt$aa$bb")
     assert await store.dashboard_token(business_id) == token
-    assert await store.business_for_token(token) == business_id
-    assert await store.business_for_token("not-a-token") is None
+    assert await store.dashboard_access(token) == (business_id, "scrypt$aa$bb")
+    assert await store.dashboard_access("not-a-token") is None
+    await store.set_dashboard(business_id, None, None)
+    assert await store.dashboard_token(business_id) is None
+    assert await store.dashboard_access(token) is None
 
 async def test_list_trust_for_a_team(store):
     _, (team_id,) = await business(store)

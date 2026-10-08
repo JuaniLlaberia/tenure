@@ -10,6 +10,7 @@ from typing import TypeVar
 
 from telegram import (
     Bot,
+    CopyTextButton,
     InlineKeyboardButton,
     InlineKeyboardMarkup,
     LinkPreviewOptions,
@@ -68,7 +69,15 @@ def _markup(keyboard: Keyboard | None) -> InlineKeyboardMarkup | None:
         return None
     return InlineKeyboardMarkup(
         [
-            [InlineKeyboardButton(b.text, callback_data=b.data, url=b.url) for b in row]
+            [
+                InlineKeyboardButton(
+                    b.text,
+                    callback_data=b.data,
+                    url=b.url,
+                    copy_text=CopyTextButton(b.copy) if b.copy else None,
+                )
+                for b in row
+            ]
             for row in keyboard
         ]
     )
@@ -180,6 +189,10 @@ def build_application(
         message = update.effective_message
         await flows.on_dashboard(message.chat_id, _thread(message))
 
+    async def dashboard_stop(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+        message = update.effective_message
+        await flows.on_dashboard_stop(message.chat_id, _thread(message))
+
     async def text(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         message = update.effective_message
         if message.from_user is None or message.from_user.is_bot:
@@ -214,6 +227,7 @@ def build_application(
     application.add_handler(CommandHandler("cancel", cancel, filters=groups))
     application.add_handler(CommandHandler("help", help_, filters=groups))
     application.add_handler(CommandHandler("dashboard", dashboard, filters=groups))
+    application.add_handler(CommandHandler("dashboard_stop", dashboard_stop, filters=groups))
     application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND & groups, text))
     application.add_handler(MessageHandler(filters.ChatType.PRIVATE, private))
     application.add_handler(CallbackQueryHandler(tap))

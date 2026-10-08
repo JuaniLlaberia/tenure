@@ -1,4 +1,3 @@
-import secrets
 from typing import Any, TypeVar
 from uuid import uuid4
 
@@ -78,22 +77,31 @@ class SupabaseStore:
             for row in rows
         ]
 
-    async def dashboard_token(self, business_id: str) -> str:
+    async def dashboard_token(self, business_id: str) -> str | None:
         db = await self._db()
         query = db.table("businesses").select("dashboard_token").eq("business_id", business_id)
         rows = (await query.execute()).data
-        if rows and rows[0]["dashboard_token"]:
-            return rows[0]["dashboard_token"]
-        token = secrets.token_urlsafe(18)
-        update = {"dashboard_token": token}
-        await db.table("businesses").update(update).eq("business_id", business_id).execute()
-        return token
+        return rows[0]["dashboard_token"] if rows else None
 
-    async def business_for_token(self, token: str) -> str | None:
+    async def set_dashboard(
+        self, business_id: str, token: str | None, password_hash: str | None
+    ) -> None:
         db = await self._db()
-        query = db.table("businesses").select("business_id").eq("dashboard_token", token)
-        rows = (await query.limit(1).execute()).data
-        return rows[0]["business_id"] if rows else None
+        update = {"dashboard_token": token, "dashboard_password_hash": password_hash}
+        await db.table("businesses").update(update).eq("business_id", business_id).execute()
+
+    async def dashboard_access(self, token: str) -> tuple[str, str] | None:
+        db = await self._db()
+        query = (
+            db.table("businesses")
+            .select("business_id, dashboard_password_hash")
+            .eq("dashboard_token", token)
+            .limit(1)
+        )
+        rows = (await query.execute()).data
+        if not rows or not rows[0]["dashboard_password_hash"]:
+            return None
+        return rows[0]["business_id"], rows[0]["dashboard_password_hash"]
 
     async def list_trust(self, team_id: str) -> list[Trust]:
         db = await self._db()

@@ -59,7 +59,8 @@ HELP = (
     "/start: set up your business (in the company group)\n"
     "/hire: hire a team, e.g. /hire marketing\n"
     "/cancel: stop an edit or a reason you started\n"
-    "/dashboard: get the private link to your dashboard\n\n"
+    "/dashboard: get the dashboard link and a new password\n"
+    "/dashboard_stop: turn the dashboard off; the next /dashboard gets a new link\n\n"
     "Talk to a team in its topic. Talk to Alex, your chief of staff, in General."
 )
 PRIVATE_HINT = (
@@ -242,11 +243,27 @@ def hire_keyboard(templates: list[TemplateInfo]) -> Keyboard:
 def hiring(name: str) -> str:
     return f"→ Hiring {name}"
 
-def dashboard_text(url: str) -> str:
+DASHBOARD_STOPPED = (
+    "Dashboard turned off. The old link and password no longer work. "
+    "Send /dashboard to turn it on with a new link."
+)
+
+def dashboard_text(password: str, minutes: int, url: str | None = None) -> str:
+    """
+    With url, the link is written out because Telegram refused the link button (local URLs).
+    """
+    link = f"\n{text(url)}" if url else ""
+    steps = "open the link above" if url else "<b>Open dashboard</b>"
     return (
-        "<b>Your dashboard</b>\n"
-        f"Keep this link private: anyone with it can see and act.\n{text(url)}"
+        f"<b>Your dashboard</b>{link}\nPassword: <code>{text(password)}</code>\n\n"
+        f"Tap <b>Copy password</b>, then {steps} and paste it.\n\n"
+        "<i>Keep both private. Sending /dashboard again makes a new password and signs out "
+        f"other browsers. This message deletes itself in {minutes} minutes.</i>"
     )
+
+def dashboard_keyboard(password: str, url: str | None = None) -> Keyboard:
+    copy = Button("Copy password", copy=password)
+    return [[copy, Button("→ Open dashboard", url=url)]] if url else [[copy]]
 
 def error_text(event: Error) -> str:
     body = f"⚠️ {text(event.message)}"

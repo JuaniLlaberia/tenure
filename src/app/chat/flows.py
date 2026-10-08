@@ -26,6 +26,7 @@ from app.chat.state import (
 )
 from app.store.base import AppStore, TelegramTopic
 from app.store.memory import InMemoryStore
+from app.web import auth
 from contract import (
     ActionDone,
     ActionUndone,
@@ -85,10 +86,14 @@ class Flows:
         typing_every: float = 4.0,
         clock: Callable[[], datetime] = _utcnow,
         dashboard_url: str = "http://localhost:8000",
+        password_ttl: float = 600,
     ) -> None:
         self._brain = brain
         self._dashboard_url = dashboard_url.rstrip("/")
         self._deciding: set[str] = set()
+        self._password_ttl = password_ttl
+        self._password_messages: dict[int, int] = {}
+        self._timers: set[asyncio.Task] = set()
         self._chat = chat
         self._state = state or AppState()
         self._store = store or InMemoryStore()
@@ -165,9 +170,54 @@ class Flows:
         business_id = await self._business(chat_id, thread_id)
         if business_id is None:
             return
-        token = await self._store.dashboard_token(business_id)
+        token = await self._store.dashboard_token(business_id) or auth.new_token()
+        password = auth.new_password()
+        password_hash = await asyncio.to_thread(auth.hash_password, password)
+        await self._store.set_dashboard(business_id, token, password_hash)
+        await self._delete_password_message(chat_id)
         url = f"{self._dashboard_url}/b/{token}"
-        await self._chat.send(chat_id, thread_id, ui.dashboard_text(url))
+        minutes = max(1, round(self._password_ttl / 60))
+        try:
+            message_id = await self._chat.send(
+                chat_id,
+                thread_id,
+                ui.dashboard_text(password, minutes),
+                ui.dashboard_keyboard(password, url),
+            )
+        except Exception:
+            logger.info("Telegram refused the dashboard link button; sending the link as text")
+            message_id = await self._chat.send(
+                chat_id,
+                thread_id,
+                ui.dashboard_text(password, minutes, url=url),
+                ui.dashboard_keyboard(password),
+            )
+        self._password_messages[chat_id] = message_id
+        timer = asyncio.create_task(self._expire_password_message(chat_id, message_id))
+        self._timers.add(timer)
+        timer.add_done_callback(self._timers.discard)
+
+    async def on_dashboard_stop(self, chat_id: int, thread_id: int | None) -> None:
+        business_id = await self._business(chat_id, thread_id)
+        if business_id is None:
+            return
+        await self._store.set_dashboard(business_id, None, None)
+        await self._delete_password_message(chat_id)
+        await self._chat.send(chat_id, thread_id, ui.DASHBOARD_STOPPED)
+
+    async def _expire_password_message(self, chat_id: int, message_id: int) -> None:
+        await asyncio.sleep(self._password_ttl)
+        if self._password_messages.get(chat_id) == message_id:
+            await self._delete_password_message(chat_id)
+
+    async def _delete_password_message(self, chat_id: int) -> None:
+        message_id = self._password_messages.pop(chat_id, None)
+        if message_id is None:
+            return
+        try:
+            await self._chat.delete(chat_id, message_id)
+        except Exception:
+            logger.debug("Deleting the password message failed", exc_info=True)
 
     async def hire_from_dashboard(self, business_id: str, template: str) -> None:
         chat_id = self._chat_for(business_id)
