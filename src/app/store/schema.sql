@@ -8,6 +8,8 @@ create table if not exists businesses (
     created_at timestamptz not null default now()
 );
 
+alter table businesses add column if not exists dashboard_token text unique;
+
 create table if not exists telegram_topics (
     team_id uuid primary key,
     business_id uuid not null references businesses on delete cascade,

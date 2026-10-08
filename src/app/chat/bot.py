@@ -140,7 +140,9 @@ class TelegramChat:
             chat_id=chat_id, action=ChatAction.TYPING, message_thread_id=thread_id
         )
 
-def build_application(token: str, brain: Brain, store: AppStore) -> Application:
+def build_application(
+    token: str, brain: Brain, store: AppStore, dashboard_url: str
+) -> tuple[Application, Flows]:
     application = (
         ApplicationBuilder()
         .token(token)
@@ -149,10 +151,9 @@ def build_application(token: str, brain: Brain, store: AppStore) -> Application:
         .read_timeout(TIMEOUT)
         .write_timeout(TIMEOUT)
         .pool_timeout(TIMEOUT)
-        .post_init(lambda _: flows.load())
         .build()
     )
-    flows = Flows(brain, TelegramChat(application.bot), store=store)
+    flows = Flows(brain, TelegramChat(application.bot), store=store, dashboard_url=dashboard_url)
 
     async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         chat = update.effective_chat
@@ -174,6 +175,10 @@ def build_application(token: str, brain: Brain, store: AppStore) -> Application:
     async def help_(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         message = update.effective_message
         await flows.on_help(message.chat_id, _thread(message))
+
+    async def dashboard(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+        message = update.effective_message
+        await flows.on_dashboard(message.chat_id, _thread(message))
 
     async def text(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         message = update.effective_message
@@ -208,8 +213,9 @@ def build_application(token: str, brain: Brain, store: AppStore) -> Application:
     application.add_handler(CommandHandler("hire", hire, filters=groups))
     application.add_handler(CommandHandler("cancel", cancel, filters=groups))
     application.add_handler(CommandHandler("help", help_, filters=groups))
+    application.add_handler(CommandHandler("dashboard", dashboard, filters=groups))
     application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND & groups, text))
     application.add_handler(MessageHandler(filters.ChatType.PRIVATE, private))
     application.add_handler(CallbackQueryHandler(tap))
     application.add_error_handler(failed)
-    return application
+    return application, flows

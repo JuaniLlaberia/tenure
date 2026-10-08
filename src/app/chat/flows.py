@@ -51,6 +51,11 @@ logger = logging.getLogger(__name__)
 Events = Callable[[], AsyncIterator[Event]]
 Tap = Callable[[int, int, str], Coroutine[Any, Any, str | None]]
 
+class Refused(Exception):
+    """
+    A dashboard action that can't be done; the message is safe to show.
+    """
+
 def _utcnow() -> datetime:
     return datetime.now(UTC)
 
@@ -79,8 +84,11 @@ class Flows:
         debounce: float = 2.5,
         typing_every: float = 4.0,
         clock: Callable[[], datetime] = _utcnow,
+        dashboard_url: str = "http://localhost:8000",
     ) -> None:
         self._brain = brain
+        self._dashboard_url = dashboard_url.rstrip("/")
+        self._deciding: set[str] = set()
         self._chat = chat
         self._state = state or AppState()
         self._store = store or InMemoryStore()
@@ -152,6 +160,75 @@ class Flows:
 
     async def on_help(self, chat_id: int, thread_id: int | None) -> None:
         await self._chat.send(chat_id, thread_id, ui.HELP)
+
+    async def on_dashboard(self, chat_id: int, thread_id: int | None) -> None:
+        business_id = await self._business(chat_id, thread_id)
+        if business_id is None:
+            return
+        token = await self._store.dashboard_token(business_id)
+        url = f"{self._dashboard_url}/b/{token}"
+        await self._chat.send(chat_id, thread_id, ui.dashboard_text(url))
+
+    async def hire_from_dashboard(self, business_id: str, template: str) -> None:
+        chat_id = self._chat_for(business_id)
+        if template not in {t.name for t in self._brain.list_templates()}:
+            raise Refused(f"There's no '{template}' team to hire.")
+        self._spawn(chat_id, None, None, partial(self._brain.hire_team, business_id, template))
+
+    async def decide_from_dashboard(
+        self, business_id: str, approval_id: str, approve: bool, reason: str | None = None
+    ) -> None:
+        """
+        Approve or reject a draft from the dashboard, as if tapped in Telegram.
+        """
+        approval = await self._store.get_approval(approval_id)
+        if approval is None or approval.business_id != business_id:
+            raise Refused("I can't find that draft.")
+        card = self._state.approvals.get(approval_id)
+        busy = card is not None and (card.chat_id, card.message_id) in self._state.handled
+        if approval.status != "pending" or busy or approval_id in self._deciding:
+            raise Refused("That draft is already being handled.")
+        chat_id = self._chat_for(business_id)
+        self._deciding.add(approval_id)
+        if card is not None:
+            footer = ui.APPROVED_ON_DASHBOARD if approve else ui.REJECTED_ON_DASHBOARD
+            await self._close(card, footer)
+        decision = ApprovalDecision(
+            business_id=business_id,
+            approval_id=approval_id,
+            decision="approve" if approve else "reject",
+            reason=reason.strip() if reason and reason.strip() else None,
+        )
+        self._track(self._decide_and_release(chat_id, approval.team_id, decision))
+
+    async def _decide_and_release(
+        self, chat_id: int, team_id: str, decision: ApprovalDecision
+    ) -> None:
+        try:
+            thread_id = self._thread_for(team_id)
+            await self._call(
+                chat_id, team_id, thread_id, lambda: self._brain.resolve_approval(decision)
+            )
+        finally:
+            self._deciding.discard(decision.approval_id)
+
+    async def forget_lesson(self, business_id: str, lesson_id: str) -> None:
+        found = False
+        for lesson in await self._store.list_all_lessons(business_id):
+            if lesson.lesson_id == lesson_id:
+                await self._store.save_lesson(lesson.model_copy(update={"active": False}))
+                found = True
+        card = self._state.lessons.pop(lesson_id, None)
+        if card is not None:
+            await self._close(card, ui.forgotten(card.persona))
+        if not found and card is None:
+            raise Refused("I can't find that lesson.")
+
+    def _chat_for(self, business_id: str) -> int:
+        for chat_id, known in self._state.businesses.items():
+            if known == business_id:
+                return chat_id
+        raise Refused("This business isn't linked to a Telegram group.")
 
     async def on_text(
         self, chat_id: int, thread_id: int | None, text: str, message_id: int, sent_at: datetime
@@ -595,11 +672,8 @@ class Flows:
         return None
 
     async def _tap_forget(self, chat_id: int, message_id: int, lesson_id: str) -> str | None:
-        card = self._state.lessons.pop(lesson_id, None)
+        card = self._state.lessons.get(lesson_id)
         if card is None:
             return ui.GONE
-        await self._close(card, ui.forgotten(card.persona))
-        for lesson in await self._store.list_lessons(card.business_id, card.team_id):
-            if lesson.lesson_id == lesson_id:
-                await self._store.save_lesson(lesson.model_copy(update={"active": False}))
+        await self.forget_lesson(card.business_id, lesson_id)
         return None

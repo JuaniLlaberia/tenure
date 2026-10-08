@@ -1,3 +1,4 @@
+import secrets
 from typing import Any, TypeVar
 from uuid import uuid4
 
@@ -76,6 +77,71 @@ class SupabaseStore:
             TelegramTopic.model_validate({**row, "chat_id": row["telegram_chat_id"]})
             for row in rows
         ]
+
+    async def dashboard_token(self, business_id: str) -> str:
+        db = await self._db()
+        query = db.table("businesses").select("dashboard_token").eq("business_id", business_id)
+        rows = (await query.execute()).data
+        if rows and rows[0]["dashboard_token"]:
+            return rows[0]["dashboard_token"]
+        token = secrets.token_urlsafe(18)
+        update = {"dashboard_token": token}
+        await db.table("businesses").update(update).eq("business_id", business_id).execute()
+        return token
+
+    async def business_for_token(self, token: str) -> str | None:
+        db = await self._db()
+        query = db.table("businesses").select("business_id").eq("dashboard_token", token)
+        rows = (await query.limit(1).execute()).data
+        return rows[0]["business_id"] if rows else None
+
+    async def list_trust(self, team_id: str) -> list[Trust]:
+        db = await self._db()
+        query = db.table("trust").select("*").eq("team_id", team_id).order("task_type")
+        return [Trust.model_validate(row) for row in (await query.execute()).data]
+
+    async def list_tasks(self, business_id: str, limit: int = 50) -> list[Task]:
+        db = await self._db()
+        query = (
+            db.table("tasks")
+            .select("*")
+            .eq("business_id", business_id)
+            .order("updated_at", desc=True)
+            .limit(limit)
+        )
+        return [Task.model_validate(row) for row in (await query.execute()).data]
+
+    async def list_approvals(
+        self, business_id: str, status: str | None = None, limit: int = 100
+    ) -> list[Approval]:
+        db = await self._db()
+        query = db.table("approvals").select("*").eq("business_id", business_id)
+        if status is not None:
+            query = query.eq("status", status)
+        query = query.order("created_at", desc=True).limit(limit)
+        return [Approval.model_validate(row) for row in (await query.execute()).data]
+
+    async def list_actions(self, business_id: str, limit: int = 50) -> list[AuditEntry]:
+        db = await self._db()
+        query = (
+            db.table("audit_log")
+            .select("*")
+            .eq("business_id", business_id)
+            .order("at", desc=True)
+            .limit(limit)
+        )
+        return [AuditEntry.model_validate(row) for row in (await query.execute()).data]
+
+    async def list_all_lessons(self, business_id: str) -> list[Lesson]:
+        db = await self._db()
+        query = (
+            db.table("lessons")
+            .select("*")
+            .eq("business_id", business_id)
+            .eq("active", True)
+            .order("created_at", desc=True)
+        )
+        return [Lesson.model_validate(row) for row in (await query.execute()).data]
 
     async def get_profile(self, business_id: str) -> BusinessProfile | None:
         return await self._get("business_profiles", BusinessProfile, business_id=business_id)

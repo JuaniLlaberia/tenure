@@ -1,0 +1,495 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="robots" content="noindex">
+<title>Tenure</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:opsz,wght@12..96,500;12..96,700&family=JetBrains+Mono:wght@400;500&family=Public+Sans:wght@400;500;600&display=swap">
+<style>
+:root {
+  --bg: #f3f5f3; --surface: #ffffff; --sunk: #eaeeeb; --ink: #16201c; --muted: #5a6862; --line: #d8dfdb;
+  --accent: #2f5d50; --accent-ink: #ffffff; --accent-soft: #e2ece8;
+  --wait: #a8660b; --wait-soft: #fbf0dc; --ok: #2d7a46; --ok-soft: #e1f2e6;
+  --bad: #b03a2e; --bad-soft: #f8e3e0; --auto: #3b5bb5; --auto-soft: #e3e9f8;
+  --toast-bg: #16201c; --toast-ink: #ffffff;
+  --font-display: "Bricolage Grotesque", "Avenir Next", "Segoe UI", sans-serif;
+  --font-body: "Public Sans", "Segoe UI", system-ui, sans-serif;
+  --font-mono: "JetBrains Mono", ui-monospace, Menlo, monospace;
+  color-scheme: light;
+}
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg: #0f1513; --surface: #161e1b; --sunk: #1c2622; --ink: #e4ebe7; --muted: #93a29b; --line: #2a3632;
+    --accent: #7cc4ae; --accent-ink: #0f1513; --accent-soft: #1d332c;
+    --wait: #e9b25a; --wait-soft: #33281a; --ok: #74c98f; --ok-soft: #1a2e21;
+    --bad: #ec8a7e; --bad-soft: #36201d; --auto: #93aef0; --auto-soft: #1d2640;
+    --toast-bg: #e4ebe7; --toast-ink: #0f1513;
+    color-scheme: dark;
+  }
+}
+* { box-sizing: border-box; }
+body { margin: 0; background: var(--bg); color: var(--ink); font-family: var(--font-body); font-size: 14.5px; line-height: 1.5; padding-inline: 16px; padding-block: 0 56px; }
+.wrap { max-width: 1240px; margin: 0 auto; display: grid; gap: 20px; }
+button, select { font: inherit; color: inherit; cursor: pointer; }
+button:focus-visible, textarea:focus-visible, a:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+button[disabled] { cursor: not-allowed; opacity: 0.6; }
+h1, h2, h3 { font-family: var(--font-display); margin: 0; text-wrap: balance; }
+.mono { font-family: var(--font-mono); font-variant-numeric: tabular-nums; }
+.sub { color: var(--muted); font-size: 13px; }
+[hidden] { display: none !important; }
+
+.top { display: flex; flex-wrap: wrap; align-items: center; gap: 12px 20px; padding-block: 14px; border-bottom: 1px solid var(--line); }
+.brand { font-family: var(--font-display); font-weight: 700; font-size: 20px; letter-spacing: -0.01em; }
+.brand span { color: var(--accent); }
+.biz h1 { font-size: 22px; font-weight: 700; line-height: 1.15; }
+.top .spacer { flex: 1; }
+.live { display: inline-flex; align-items: center; gap: 8px; font-size: 12.5px; color: var(--muted); }
+.live i { width: 8px; height: 8px; border-radius: 50%; background: var(--ok); box-shadow: 0 0 0 3px var(--ok-soft); }
+.live.down i { background: var(--bad); box-shadow: 0 0 0 3px var(--bad-soft); }
+.btn { border: 1px solid var(--line); background: var(--surface); border-radius: 8px; padding: 7px 12px; font-weight: 500; font-size: 13.5px; }
+.btn:hover:not([disabled]) { border-color: var(--muted); }
+.btn.primary { background: var(--accent); color: var(--accent-ink); border-color: var(--accent); }
+.btn.small { padding: 4px 9px; font-size: 12.5px; }
+.btn.quiet { border-color: transparent; background: transparent; color: var(--muted); }
+.btn.quiet:hover:not([disabled]) { color: var(--ink); background: var(--sunk); }
+.btn.danger { color: var(--bad); }
+
+.strip { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 22px; background: var(--surface); border: 1px solid var(--line); border-radius: 12px; padding: 12px 16px; }
+.attn { display: inline-flex; align-items: center; gap: 8px; background: var(--wait-soft); color: var(--wait); border-radius: 999px; padding: 4px 12px; font-weight: 600; font-size: 13.5px; }
+.attn.clear { background: var(--ok-soft); color: var(--ok); }
+.stat { display: flex; align-items: baseline; gap: 6px; font-size: 13px; color: var(--muted); }
+.stat b { font-family: var(--font-display); font-size: 19px; color: var(--ink); font-weight: 700; font-variant-numeric: tabular-nums; }
+
+.board { display: grid; grid-template-columns: minmax(0, 1fr); gap: 20px; }
+@media (min-width: 1000px) { .board { grid-template-columns: minmax(0, 1.65fr) minmax(0, 1fr); align-items: start; } }
+.col { display: grid; gap: 20px; min-width: 0; }
+.panel { background: var(--surface); border: 1px solid var(--line); border-radius: 12px; padding: 16px 18px; display: grid; gap: 14px; min-width: 0; }
+.panel-head { display: flex; flex-wrap: wrap; align-items: baseline; gap: 6px 12px; }
+.panel-head h2 { font-size: 17px; font-weight: 700; }
+.label { font-size: 11.5px; letter-spacing: 0.06em; text-transform: uppercase; color: var(--muted); font-weight: 600; }
+.empty { color: var(--muted); margin: 0; font-size: 13.5px; }
+
+.team { display: grid; gap: 10px; }
+.team + .team { border-top: 1px solid var(--line); padding-top: 14px; }
+.team-head { display: flex; flex-wrap: wrap; gap: 10px 16px; align-items: center; }
+.team-head h3 { font-size: 16px; }
+.people { display: flex; flex-wrap: wrap; gap: 6px 14px; }
+.person { display: flex; align-items: center; gap: 8px; font-size: 13.5px; }
+.ava { width: 30px; height: 30px; border-radius: 50%; display: grid; place-items: center; font-weight: 600; font-size: 12.5px; color: var(--accent-ink); background: var(--accent); flex: none; }
+.ava.s1 { background: var(--auto); }
+.ava.s2 { background: var(--wait); }
+.person small { color: var(--muted); display: block; font-size: 12px; line-height: 1.2; }
+.badge { font-size: 11.5px; border-radius: 999px; padding: 1px 8px; background: var(--sunk); color: var(--muted); font-family: var(--font-body); font-weight: 500; }
+.trust { border-top: 1px solid var(--line); }
+.trust-row { display: grid; grid-template-columns: minmax(120px, 1fr) minmax(220px, 2fr) auto; gap: 10px 18px; align-items: center; padding-block: 12px; border-bottom: 1px solid var(--line); }
+@media (max-width: 640px) { .trust-row { grid-template-columns: minmax(0, 1fr); } }
+.tt-name { font-weight: 600; }
+.ladder { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 4px; }
+.rung { display: grid; gap: 4px; min-width: 0; }
+.rung .bar { height: 6px; border-radius: 3px; background: var(--sunk); }
+.rung.on .bar { background: var(--accent); }
+.rung span { font-size: 11px; color: var(--muted); line-height: 1.2; overflow-wrap: anywhere; }
+.rung.now span { color: var(--ink); font-weight: 600; }
+.streak { display: flex; align-items: center; gap: 8px; font-size: 12.5px; color: var(--muted); margin-top: 6px; flex-wrap: wrap; }
+.pips { display: inline-flex; gap: 3px; }
+.pips i { width: 9px; height: 9px; border-radius: 50%; border: 1.5px solid var(--accent); }
+.pips i.f { background: var(--accent); }
+.tt-actions { display: flex; flex-wrap: wrap; gap: 6px; justify-content: flex-end; align-items: center; font-size: 12.5px; }
+.threshold { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 12px; font-size: 13px; color: var(--muted); }
+.stepper { display: inline-flex; align-items: center; border: 1px solid var(--line); border-radius: 8px; overflow: hidden; opacity: 0.55; }
+.stepper button { border: 0; background: var(--sunk); width: 28px; height: 28px; }
+.stepper output { min-width: 34px; text-align: center; font-family: var(--font-mono); color: var(--ink); }
+
+.pill { display: inline-flex; align-items: center; gap: 5px; font-size: 12px; font-weight: 600; border-radius: 999px; padding: 2px 9px; white-space: nowrap; }
+.pill.waiting_approval, .pill.wait { background: var(--wait-soft); color: var(--wait); }
+.pill.done, .pill.ok { background: var(--ok-soft); color: var(--ok); }
+.pill.rejected, .pill.failed, .pill.bad { background: var(--bad-soft); color: var(--bad); }
+.pill.auto { background: var(--auto-soft); color: var(--auto); }
+.pill.in_progress, .pill.planned { background: var(--accent-soft); color: var(--accent); }
+.pill.neutral { background: var(--sunk); color: var(--muted); }
+
+.drafts { display: grid; gap: 12px; }
+.draft { border: 1px solid var(--line); border-left: 3px solid var(--wait); border-radius: 10px; padding: 12px 14px; display: grid; gap: 8px; min-width: 0; }
+.draft-head { display: flex; flex-wrap: wrap; gap: 6px 10px; align-items: center; font-size: 13px; color: var(--muted); }
+.draft-head b { color: var(--ink); font-size: 14px; }
+.draft pre { margin: 0; white-space: pre-wrap; overflow-wrap: anywhere; font-family: var(--font-body); font-size: 13.5px; background: var(--sunk); border-radius: 8px; padding: 10px 12px; max-height: 12em; overflow: auto; }
+.draft-foot { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; justify-content: space-between; font-size: 12.5px; color: var(--muted); }
+.acts { display: flex; gap: 6px; flex-wrap: wrap; align-items: center; }
+.reason { display: grid; gap: 8px; }
+textarea { width: 100%; min-height: 64px; font: 14px var(--font-body); color: var(--ink); background: var(--bg); border: 1px solid var(--line); border-radius: 8px; padding: 8px 10px; resize: vertical; }
+
+.table-wrap { overflow-x: auto; }
+table { width: 100%; border-collapse: collapse; font-size: 13.5px; min-width: 560px; }
+th { text-align: left; font-size: 11.5px; letter-spacing: 0.05em; text-transform: uppercase; color: var(--muted); font-weight: 600; padding: 6px 4px; border-bottom: 1px solid var(--line); }
+td { padding: 9px 4px; border-bottom: 1px solid var(--line); vertical-align: top; }
+td.num, th.num { text-align: right; font-family: var(--font-mono); font-variant-numeric: tabular-nums; }
+td small { color: var(--muted); }
+tr:last-child td { border-bottom: 0; }
+
+.lesson { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 4px 10px; padding: 9px 0; border-bottom: 1px solid var(--line); align-items: start; }
+.lesson:last-child { border-bottom: 0; }
+.lesson p { margin: 0; font-weight: 500; overflow-wrap: anywhere; }
+.lesson .meta { grid-column: 1; display: flex; flex-wrap: wrap; gap: 4px 8px; font-size: 12px; color: var(--muted); }
+.lesson .meta .all { color: var(--auto); font-weight: 600; }
+
+.entry { display: grid; grid-template-columns: 64px minmax(0, 1fr); gap: 10px; padding: 9px 0; border-bottom: 1px solid var(--line); }
+.entry:last-child { border-bottom: 0; }
+.entry time { font-family: var(--font-mono); font-size: 12px; color: var(--muted); padding-top: 2px; }
+.entry .what { display: grid; gap: 3px; min-width: 0; }
+.entry .what b { font-weight: 600; overflow-wrap: anywhere; }
+.entry .what b.undone { text-decoration: line-through; color: var(--muted); }
+.tags { display: flex; flex-wrap: wrap; gap: 4px 6px; }
+.entry a { color: var(--accent); font-size: 12.5px; }
+
+dialog { border: 1px solid var(--line); border-radius: 14px; padding: 0; background: var(--surface); color: var(--ink); width: min(560px, calc(100% - 32px)); }
+dialog::backdrop { background: rgba(10, 16, 14, 0.45); }
+.dlg { padding: 18px; display: grid; gap: 14px; }
+.dlg-head { display: flex; align-items: center; gap: 10px; }
+.dlg-head h2 { font-size: 19px; }
+.dlg-head .btn { margin-left: auto; }
+.templates { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 10px; }
+.tpl { border: 1px solid var(--line); border-radius: 10px; padding: 12px; display: grid; gap: 8px; align-content: start; }
+.tpl h3 { font-size: 16px; }
+.tpl p { margin: 0; color: var(--muted); font-size: 13px; }
+
+.toast { position: fixed; left: 50%; bottom: 20px; transform: translateX(-50%); background: var(--toast-bg); color: var(--toast-ink); padding: 10px 16px; border-radius: 10px; font-size: 13.5px; max-width: calc(100% - 32px); z-index: 10; }
+.toast.error { background: var(--bad); color: #ffffff; }
+.notice { padding: 40px 0; text-align: center; color: var(--muted); }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header class="top">
+    <div class="brand">ten<span>ure</span></div>
+    <div class="biz"><h1 id="biz-name">Loading…</h1></div>
+    <div class="spacer"></div>
+    <span class="live" id="live"><i></i><span id="live-text">Connecting…</span></span>
+    <button class="btn primary" id="open-hire" type="button">Hire a team</button>
+  </header>
+
+  <section class="strip" aria-label="Summary" id="strip"></section>
+
+  <div class="board">
+    <div class="col">
+      <section class="panel" aria-label="Teams">
+        <div class="panel-head"><h2>Teams</h2><span class="sub">Trust is earned per kind of task</span></div>
+        <div id="teams"></div>
+      </section>
+      <section class="panel" aria-label="Waiting for you">
+        <div class="panel-head"><h2>Waiting for you</h2><span class="sub">Decide here or in Telegram. Edits happen in Telegram.</span></div>
+        <div class="drafts" id="drafts"></div>
+      </section>
+      <section class="panel" aria-label="Tasks">
+        <div class="panel-head"><h2>Tasks</h2><span class="sub">Newest first</span></div>
+        <div class="table-wrap">
+          <table>
+            <thead><tr><th>Task</th><th>Type</th><th>Status</th><th class="num">Revisions</th><th class="num">Tokens</th><th class="num">Updated</th></tr></thead>
+            <tbody id="tasks"></tbody>
+          </table>
+        </div>
+      </section>
+    </div>
+    <div class="col">
+      <section class="panel" aria-label="What your team knows">
+        <div class="panel-head"><h2 id="lessons-title">What your teams know about you</h2><span class="sub">Used in every draft and check</span></div>
+        <div id="lessons"></div>
+      </section>
+      <section class="panel" aria-label="Activity">
+        <div class="panel-head"><h2>Activity</h2><span class="sub">Every real action, as logged</span></div>
+        <div id="log"></div>
+      </section>
+    </div>
+  </div>
+</div>
+
+<dialog id="hire">
+  <div class="dlg">
+    <div class="dlg-head"><h2>Hire a team</h2><button class="btn quiet" id="close-hire" type="button">Close</button></div>
+    <p class="sub">A new team gets its own topic in your Telegram group and starts on probation: it asks before it acts.</p>
+    <div class="templates" id="templates"></div>
+  </div>
+</dialog>
+
+<script>
+const TOKEN = location.pathname.split("/")[2];
+const API = `/api/b/${TOKEN}`;
+const REFRESH_MS = 5000;
+const ui = { lowering: null, rejecting: null, busy: new Set() };
+let data = null;
+let lastLoad = 0;
+let failing = false;
+
+const $ = (id) => document.getElementById(id);
+const esc = (s) => String(s ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[c]);
+const fmtNum = (n) => Number(n).toLocaleString("en-US");
+const fmtTokens = (n) => (n >= 1000 ? `${(n / 1000).toFixed(1)}k` : String(n));
+
+function fmtTime(iso) {
+  const d = new Date(iso);
+  const now = new Date();
+  const time = d.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+  if (d.toDateString() === now.toDateString()) return time;
+  const days = (now - d) / 86400000;
+  if (days < 6) return d.toLocaleDateString([], { weekday: "short" });
+  return d.toLocaleDateString([], { month: "short", day: "numeric" });
+}
+
+let toastTimer;
+function toast(text, error = false) {
+  document.querySelectorAll(".toast").forEach((t) => t.remove());
+  const el = document.createElement("div");
+  el.className = error ? "toast error" : "toast";
+  el.setAttribute("role", "status");
+  el.textContent = text;
+  document.body.appendChild(el);
+  clearTimeout(toastTimer);
+  toastTimer = setTimeout(() => el.remove(), 3200);
+}
+
+async function post(path, body) {
+  const response = await fetch(`${API}${path}`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(body || {}),
+  });
+  const payload = await response.json().catch(() => ({}));
+  if (!response.ok) throw new Error(payload.message || payload.detail || "That didn't work. Try again.");
+  return payload.message;
+}
+
+async function act(key, path, body) {
+  if (ui.busy.has(key)) return;
+  ui.busy.add(key);
+  render();
+  try {
+    toast(await post(path, body));
+    ui.lowering = null;
+    ui.rejecting = null;
+  } catch (error) {
+    toast(error.message, true);
+  } finally {
+    ui.busy.delete(key);
+    await load();
+  }
+}
+
+function renderStrip() {
+  const s = data.stats;
+  const waiting = s.waiting
+    ? `<span class="attn">${s.waiting} draft${s.waiting > 1 ? "s" : ""} waiting for you</span>`
+    : `<span class="attn clear">Nothing waiting for you</span>`;
+  const rate = s.clean_rate === null ? "–" : `${s.clean_rate}%`;
+  $("strip").innerHTML = `${waiting}
+    <span class="stat"><b>${s.done_week}</b> tasks done this week</span>
+    <span class="stat"><b>${s.actions_week}</b> real actions</span>
+    <span class="stat"><b>${rate}</b> approved without edits</span>
+    <span class="stat"><b class="mono">${fmtTokens(s.tokens_week)}</b> tokens · about $${s.cost_week.toFixed(2)}</span>`;
+}
+
+function renderTeams() {
+  if (!data.teams.length) {
+    $("teams").innerHTML = `<p class="empty">No teams yet. Use “Hire a team” to get started.</p>`;
+    return;
+  }
+  const threshold = `
+    <div class="threshold">
+      <span>Offer more autonomy after</span>
+      <span class="stepper" title="Coming soon: waiting for a contract change">
+        <button type="button" disabled aria-label="Fewer approvals">−</button><output>${data.promotion_streak}</output><button type="button" disabled aria-label="More approvals">+</button>
+      </span>
+      <span>approvals in a row without edits</span>
+      <span class="badge">Coming soon</span>
+    </div>`;
+  $("teams").innerHTML = data.teams.map((team) => `
+    <div class="team">
+      <div class="team-head">
+        <h3>${esc(team.name)} <span class="badge">hired ${esc(fmtTime(team.hired_at))}</span>${team.onboarded ? "" : ' <span class="badge">getting to know you</span>'}</h3>
+        <div class="people">${team.people.map((p, i) => `
+          <div class="person"><span class="ava s${i % 3}">${esc(p.name[0])}</span><div>${esc(p.name)}<small>${esc(p.role)}</small></div></div>`).join("")}</div>
+      </div>
+      <div class="trust">${team.trust.map((t) => trustRow(team, t)).join("")}</div>
+      ${threshold}
+    </div>`).join("");
+}
+
+function trustRow(team, t) {
+  const key = `${team.team_id}:${t.task_type}`;
+  const rungs = data.levels.map((name, n) => `<div class="rung ${n <= t.level ? "on" : ""} ${n === t.level ? "now" : ""}"><div class="bar"></div><span>${esc(name)}</span></div>`).join("");
+  const max = data.promotion_streak;
+  const filled = Math.min(t.streak, max);
+  const pips = Array.from({ length: max }, (_, n) => `<i class="${n < filled ? "f" : ""}"></i>`).join("");
+  const lead = team.people[0] ? team.people[0].name : "The team";
+  const streak = t.level < data.levels.length - 1
+    ? `<div class="streak"><span class="pips" aria-hidden="true">${pips}</span><span class="mono">${filled}/${max}</span> approvals in a row before ${esc(lead)} asks for more</div>`
+    : `<div class="streak">Highest level</div>`;
+  let actions = "";
+  if (ui.lowering === key) {
+    actions = `Lower to ${esc(data.levels[t.level - 1])}?
+      <button class="btn small danger" data-act="lower-yes" data-team="${esc(team.team_id)}" data-type="${esc(t.task_type)}" type="button" ${ui.busy.has(key) ? "disabled" : ""}>Lower</button>
+      <button class="btn small quiet" data-act="lower-no" type="button">Cancel</button>`;
+  } else if (t.level > 0) {
+    actions = `<button class="btn small" data-act="lower" data-key="${esc(key)}" type="button">Lower</button>`;
+  }
+  return `
+    <div class="trust-row">
+      <div class="tt-name">${esc(t.label)}</div>
+      <div><div class="ladder">${rungs}</div>${streak}</div>
+      <div class="tt-actions">${actions}</div>
+    </div>`;
+}
+
+function renderDrafts() {
+  if (!data.drafts.length) {
+    $("drafts").innerHTML = `<p class="empty">Nothing waiting. New drafts appear here as soon as a team finishes them.</p>`;
+    return;
+  }
+  $("drafts").innerHTML = data.drafts.map((d) => {
+    const busy = ui.busy.has(d.approval_id) ? "disabled" : "";
+    const acts = ui.rejecting === d.approval_id
+      ? `<div class="reason">
+           <label class="sub" for="reason-${esc(d.approval_id)}">Why? With a reason the team revises it and learns. Leave empty to drop it.</label>
+           <textarea id="reason-${esc(d.approval_id)}" placeholder="Too salesy, mention the Friday date…"></textarea>
+           <span class="acts">
+             <button class="btn small danger" data-act="reject-yes" data-id="${esc(d.approval_id)}" type="button" ${busy}>Reject</button>
+             <button class="btn small quiet" data-act="reject-no" type="button">Cancel</button>
+           </span>
+         </div>`
+      : `<span class="acts">
+           <button class="btn small primary" data-act="approve" data-id="${esc(d.approval_id)}" type="button" ${busy}>Approve</button>
+           <button class="btn small" data-act="reject" data-id="${esc(d.approval_id)}" type="button" ${busy}>Reject</button>
+         </span>`;
+    return `
+      <article class="draft">
+        <div class="draft-head"><b>${esc(d.title)}</b><span>${esc(d.type)} · ${esc(d.team)}</span><span class="pill wait">Waiting</span></div>
+        <pre>${esc(d.preview)}</pre>
+        <div class="draft-foot"><span>${esc(d.meta)} · check <span class="mono">${d.check}%</span> · ${esc(fmtTime(d.created_at))}</span>${ui.rejecting === d.approval_id ? "" : acts}</div>
+        ${ui.rejecting === d.approval_id ? acts : ""}
+      </article>`;
+  }).join("");
+}
+
+function renderTasks() {
+  $("tasks").innerHTML = data.tasks.length ? data.tasks.map((t) => `
+    <tr>
+      <td>${esc(t.title)}<br><small>${esc(t.team)}</small></td>
+      <td><small>${esc(t.type)}</small></td>
+      <td><span class="pill ${esc(t.status)}">${esc(t.status_label)}</span></td>
+      <td class="num">${t.revisions}</td>
+      <td class="num">${fmtNum(t.tokens)}</td>
+      <td class="num"><small>${esc(fmtTime(t.updated_at))}</small></td>
+    </tr>`).join("") : `<tr><td colspan="6" class="empty">No tasks yet. Ask a team for something in its Telegram topic.</td></tr>`;
+}
+
+function renderLessons() {
+  $("lessons-title").textContent = data.lead ? `What ${data.lead} knows about you` : "What your teams know about you";
+  const group = (kind, label) => {
+    const items = data.lessons.filter((l) => l.kind === kind);
+    if (!items.length) return "";
+    return `<div class="label">${label}</div>` + items.map((l) => `
+      <div class="lesson">
+        <p>${esc(l.text)}</p>
+        <button class="btn small quiet" data-act="forget" data-id="${esc(l.lesson_id)}" type="button" ${ui.busy.has(l.lesson_id) ? "disabled" : ""}>Forget</button>
+        <div class="meta"><span class="${l.business_wide ? "all" : ""}">${esc(l.scope)}</span><span>${esc(l.source)}</span>${l.only ? `<span>${esc(l.only)}</span>` : ""}</div>
+      </div>`).join("");
+  };
+  $("lessons").innerHTML = group("preference", "Preferences") + group("fact", "Facts")
+    || `<p class="empty">Nothing yet. Edits, rejections and feedback in chat show up here.</p>`;
+}
+
+function renderLog() {
+  $("log").innerHTML = data.activity.length ? data.activity.map((a) => {
+    const tags = [];
+    if (!a.ok) tags.push(`<span class="pill bad">Failed</span>`);
+    tags.push(a.autonomous ? `<span class="pill auto">On its own</span>` : `<span class="pill ok">Approved by you</span>`);
+    if (a.undone_at) tags.push(`<span class="pill bad">Undone ${esc(fmtTime(a.undone_at))}</span>`);
+    else if (a.undo_until) tags.push(`<span class="pill wait">Undo in Telegram until ${esc(fmtTime(a.undo_until))}</span>`);
+    else if (a.permanent) tags.push(`<span class="pill neutral">Can't be undone</span>`);
+    return `
+      <div class="entry">
+        <time>${esc(fmtTime(a.at))}</time>
+        <div class="what">
+          <b class="${a.undone_at ? "undone" : ""}">${esc(a.summary)}</b>
+          ${a.task ? `<small class="sub">${esc(a.task)}</small>` : ""}
+          <div class="tags">${tags.join("")}</div>
+          ${a.url && !a.undone_at ? `<a href="${esc(a.url)}" target="_blank" rel="noopener noreferrer">View</a>` : ""}
+        </div>
+      </div>`;
+  }).join("") : `<p class="empty">No actions yet. Posts and emails appear here once approved.</p>`;
+}
+
+function renderTemplates() {
+  $("templates").innerHTML = data.templates.map((t) => `
+    <div class="tpl">
+      <h3>${esc(t.display_name)}</h3>
+      <p>${esc(t.description)}</p>
+      <p>${esc(t.people)}</p>
+      ${t.hired
+        ? `<span class="pill ok" style="justify-self:start">Hired</span>`
+        : `<button class="btn primary small" style="justify-self:start" data-act="hire" data-id="${esc(t.name)}" type="button" ${ui.busy.has("hire") ? "disabled" : ""}>Hire ${esc(t.display_name)}</button>`}
+    </div>`).join("");
+}
+
+function render() {
+  if (!data) return;
+  document.title = `${data.business.name} · Tenure`;
+  $("biz-name").textContent = data.business.name;
+  renderStrip(); renderTeams(); renderDrafts(); renderTasks(); renderLessons(); renderLog(); renderTemplates();
+}
+
+function renderLive() {
+  const live = $("live");
+  live.classList.toggle("down", failing);
+  if (failing) { $("live-text").textContent = "Can't reach the server, retrying"; return; }
+  if (!lastLoad) return;
+  const seconds = Math.max(0, Math.round((Date.now() - lastLoad) / 1000));
+  $("live-text").textContent = `Live · updated ${seconds} s ago`;
+}
+
+async function load() {
+  try {
+    const response = await fetch(`${API}/overview`, { cache: "no-store" });
+    if (response.status === 404) {
+      document.querySelector(".wrap").innerHTML = `<p class="notice">This dashboard link isn't valid. Send /dashboard in your Telegram group for a new one.</p>`;
+      return;
+    }
+    if (!response.ok) throw new Error(String(response.status));
+    data = await response.json();
+    lastLoad = Date.now();
+    failing = false;
+    const typing = document.activeElement && document.activeElement.tagName === "TEXTAREA";
+    if (!typing) render();
+  } catch (error) {
+    failing = true;
+  }
+  renderLive();
+}
+
+document.addEventListener("click", (event) => {
+  const el = event.target.closest("[data-act]");
+  if (!el) return;
+  const id = el.dataset.id;
+  switch (el.dataset.act) {
+    case "approve": act(id, `/approvals/${id}/approve`); break;
+    case "reject": ui.rejecting = id; render(); $(`reason-${id}`)?.focus(); break;
+    case "reject-no": ui.rejecting = null; render(); break;
+    case "reject-yes": act(id, `/approvals/${id}/reject`, { reason: $(`reason-${id}`)?.value || null }); break;
+    case "lower": ui.lowering = el.dataset.key; render(); break;
+    case "lower-no": ui.lowering = null; render(); break;
+    case "lower-yes": act(`${el.dataset.team}:${el.dataset.type}`, "/trust/lower", { team_id: el.dataset.team, task_type: el.dataset.type }); break;
+    case "forget": act(id, `/lessons/${id}/forget`); break;
+    case "hire": $("hire").close(); act("hire", "/hire", { template: id }); break;
+  }
+});
+
+$("open-hire").addEventListener("click", () => $("hire").showModal());
+$("close-hire").addEventListener("click", () => $("hire").close());
+
+load();
+setInterval(load, REFRESH_MS);
+setInterval(renderLive, 1000);
+</script>
+</body>
+</html>

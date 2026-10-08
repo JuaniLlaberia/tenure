@@ -251,3 +251,61 @@ async def test_returned_models_are_copies(store):
     (loaded,) = await store.list_lessons(business_id, team_id)
     loaded.active = False
     assert await store.list_lessons(business_id, team_id) != []
+
+async def test_dashboard_token_is_stable_and_resolves(store):
+    business_id, _ = await business(store)
+    token = await store.dashboard_token(business_id)
+    assert len(token) >= 20
+    assert await store.dashboard_token(business_id) == token
+    assert await store.business_for_token(token) == business_id
+    assert await store.business_for_token("not-a-token") is None
+
+async def test_list_trust_for_a_team(store):
+    _, (team_id,) = await business(store)
+    for task_type in ("social_post", "newsletter"):
+        await store.set_trust(
+            Trust(team_id=team_id, task_type=task_type, level=AutonomyLevel.ACT_AFTER_APPROVAL,
+                  updated_at=NOW)
+        )
+    assert [t.task_type for t in await store.list_trust(team_id)] == ["newsletter", "social_post"]
+
+async def test_dashboard_lists_are_newest_first(store):
+    business_id, (team_id,) = await business(store)
+    other_business, _ = await business(store)
+    for minutes in (1, 3, 2):
+        await store.save_task(
+            Task(task_id=new_id(), business_id=business_id, team_id=team_id,
+                 task_type="social_post", title=f"t{minutes}", brief="b",
+                 status=TaskStatus.DONE, steps=["writer"], created_at=NOW,
+                 updated_at=NOW + timedelta(minutes=minutes))
+        )
+    assert [t.title for t in await store.list_tasks(business_id)] == ["t3", "t2", "t1"]
+    assert await store.list_tasks(other_business) == []
+
+    waiting = approval(business_id, team_id)
+    done = approval(business_id, team_id, "approved", minutes=1)
+    await store.save_approval(waiting)
+    await store.save_approval(done)
+    pending = await store.list_approvals(business_id, "pending")
+    assert [a.approval_id for a in pending] == [waiting.approval_id]
+    assert len(await store.list_approvals(business_id)) == 2
+
+    for minutes in (1, 2):
+        action_id = new_id()
+        await store.log_action(
+            AuditEntry(action_id=action_id, business_id=business_id, team_id=team_id,
+                       task_id=new_id(), tool="send_email", summary=f"a{minutes}",
+                       result=ActionResult(action_id=action_id, ok=True), autonomous=False,
+                       at=NOW + timedelta(minutes=minutes))
+        )
+    assert [a.summary for a in await store.list_actions(business_id)] == ["a2", "a1"]
+
+    shared = lesson(business_id, minutes=1)
+    mine = lesson(business_id, team_id, minutes=2)
+    hidden = lesson(business_id, team_id, minutes=3, active=False)
+    for item in (shared, mine, hidden):
+        await store.save_lesson(item)
+    assert [x.lesson_id for x in await store.list_all_lessons(business_id)] == [
+        mine.lesson_id,
+        shared.lesson_id,
+    ]

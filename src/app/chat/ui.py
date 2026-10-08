@@ -58,7 +58,8 @@ HELP = (
     "<b>What I can do</b>\n"
     "/start: set up your business (in the company group)\n"
     "/hire: hire a team, e.g. /hire marketing\n"
-    "/cancel: stop an edit or a reason you started\n\n"
+    "/cancel: stop an edit or a reason you started\n"
+    "/dashboard: get the private link to your dashboard\n\n"
     "Talk to a team in its topic. Talk to Alex, your chief of staff, in General."
 )
 PRIVATE_HINT = (
@@ -82,6 +83,8 @@ EDITING = "✎ Editing: send your version below, or /cancel"
 EDITED = "✎ Edited"
 REJECTING = "✕ Rejecting: send your reason below, or /cancel"
 REJECTED = "✕ Rejected"
+APPROVED_ON_DASHBOARD = "✓ Approved on the dashboard"
+REJECTED_ON_DASHBOARD = "✕ Rejected on the dashboard"
 
 def text(value: str) -> str:
     return escape(value, quote=False)
@@ -238,6 +241,12 @@ def hire_keyboard(templates: list[TemplateInfo]) -> Keyboard:
 
 def hiring(name: str) -> str:
     return f"→ Hiring {name}"
+
+def dashboard_text(url: str) -> str:
+    return (
+        "<b>Your dashboard</b>\n"
+        f"Keep this link private: anyone with it can see and act.\n{text(url)}"
+    )
 
 def error_text(event: Error) -> str:
     body = f"⚠️ {text(event.message)}"

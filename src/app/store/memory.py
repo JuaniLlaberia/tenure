@@ -1,3 +1,4 @@
+import secrets
 from typing import TypeVar
 from uuid import uuid4
 
@@ -36,6 +37,7 @@ class InMemoryStore:
         self._approvals: dict[str, Approval] = {}
         self._lessons: dict[str, Lesson] = {}
         self._actions: dict[str, AuditEntry] = {}
+        self._tokens: dict[str, str] = {}
 
     async def create_business(self, chat_id: int) -> str:
         business_id = str(uuid4())
@@ -50,6 +52,48 @@ class InMemoryStore:
 
     async def list_topics(self) -> list[TelegramTopic]:
         return [_copy(topic) for topic in self._topics.values()]
+
+    async def dashboard_token(self, business_id: str) -> str:
+        if business_id not in self._tokens:
+            self._tokens[business_id] = secrets.token_urlsafe(18)
+        return self._tokens[business_id]
+
+    async def business_for_token(self, token: str) -> str | None:
+        return next((b for b, t in self._tokens.items() if t == token), None)
+
+    async def list_trust(self, team_id: str) -> list[Trust]:
+        rows = [t for (team, _), t in self._trust.items() if team == team_id]
+        return [_copy(t) for t in sorted(rows, key=lambda t: t.task_type)]
+
+    async def list_tasks(self, business_id: str, limit: int = 50) -> list[Task]:
+        tasks = [t for t in self._tasks.values() if t.business_id == business_id]
+        tasks.sort(key=lambda t: t.updated_at, reverse=True)
+        return [_copy(t) for t in tasks[:limit]]
+
+    async def list_approvals(
+        self, business_id: str, status: str | None = None, limit: int = 100
+    ) -> list[Approval]:
+        approvals = [
+            a
+            for a in self._approvals.values()
+            if a.business_id == business_id and (status is None or a.status == status)
+        ]
+        approvals.sort(key=lambda a: a.created_at, reverse=True)
+        return [_copy(a) for a in approvals[:limit]]
+
+    async def list_actions(self, business_id: str, limit: int = 50) -> list[AuditEntry]:
+        actions = [a for a in self._actions.values() if a.business_id == business_id]
+        actions.sort(key=lambda a: a.at, reverse=True)
+        return [_copy(a) for a in actions[:limit]]
+
+    async def list_all_lessons(self, business_id: str) -> list[Lesson]:
+        lessons = [
+            lesson
+            for lesson in self._lessons.values()
+            if lesson.business_id == business_id and lesson.active
+        ]
+        lessons.sort(key=lambda lesson: lesson.created_at, reverse=True)
+        return [_copy(lesson) for lesson in lessons]
 
     async def get_profile(self, business_id: str) -> BusinessProfile | None:
         return _copy(self._profiles.get(business_id))
