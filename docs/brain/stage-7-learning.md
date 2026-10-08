@@ -74,7 +74,7 @@ A message that is both feedback and work ("stop using hashtags, and post about F
 
 `tests/brain/test_learning_wired.py` (through the facade)
 
-- `test_chat_feedback_becomes_lesson`: "Stop using hashtags" with `has_feedback` yes and `wants_work` no → `LessonLearned` with `source="chat"` and `source_ref=message_id`, then one `Say`, no tasks.
+- `test_chat_feedback_becomes_lesson`: "Stop using hashtags" with `has_feedback` yes and no task type routed → `LessonLearned` with `source="chat"` and `source_ref=message_id`, then one `Say`, no tasks.
 - `test_feedback_and_work_in_one_message`: `LessonLearned` before `NeedsApproval`; the writer's prompt contains the new lesson.
 - `test_no_feedback_no_reflect_call`: `has_feedback` no → no `ReflectOutput` call.
 - `test_edit_becomes_lesson`: `source="edit"`, `source_ref=approval_id`; reflect saw original and edited text.

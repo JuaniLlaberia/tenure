@@ -1,6 +1,6 @@
 # Stage 6: Team graph and facade (demo slice)
 
-**Status:** not started
+**Status:** done; tests waiting for Juan's review
 **Depends on:** stages 3, 4, 5
 **Spec:** [brain-engine.md](../specs/brain-engine.md) §2 (layers, interrupt rule), §3.1 (team graph), §9 (`decide()`); [CONTRACT.md](../CONTRACT.md) §4 (Brain), §5 (stream lifecycle), §6 (events)
 
@@ -77,12 +77,13 @@ Node by node (spec §3.1):
 
 | Node | Does | Next |
 | --- | --- | --- |
-| `entry` | loads the team. `revise` set → loads the approval and task from the Store, builds a `TaskState` with the rejected draft and reason as feedback, `revisions + 1`, `current_step = last`, `order = [task_id]` | `revise` → `dispatch`; not onboarded → `onboard`; else `triage` |
+| `entry` | loads the team. `revise` set → loads the approval and task from the Store, builds a `TaskState` with the rejected draft and reason as feedback, `revisions + 1`, `current_step = last`, `order = [task_id]` | `revise` → `dispatch`; not onboarded → `onboard_intro` (or `onboard_done` if the template has no questions); else `triage` |
+| `onboard_intro` | one lead `Say` introducing the team (its own node, so it isn't repeated on resume) | `onboard` |
 | `onboard` | next unanswered template question → `interrupt(Ask(...))`; after resume saves a team `fact` lesson (`key`, `source="team_onboarding"`, text `"{question} {answer}"`) | more questions → `onboard`; else `onboard_done` |
 | `onboard_done` | `team.onboarded = True`, `OnboardingComplete(scope="team")`, lead `Say` ("Thanks! What should we work on first?") | END |
-| `triage` | one `decide()`: `has_feedback`, `wants_work`. Feedback accepted and `learn` set → yields its events | work accepted → `route`; else `reply` |
-| `reply` | lead LLM `complete()` → one `Say` (acknowledge, short answer, or say what the team can do) | END |
-| `route` | one `decide()` with `needs_{task_type}` per task type; keeps the accepted ones, max `max_tasks_per_request` | none → `reply`; else `plan` |
+| `triage` | ONE `decide()` on `triage_state` (team context + message): `has_feedback` and `needs_{task_type}` per task type. Feedback accepted and `learn` set → yields its events. Keeps the task types accepted at `ROUTE_THRESHOLD`, max `max_tasks_per_request` | none routed → `reply`; else `plan` |
+| `reply` | lead LLM `complete()` → one `Say` (acknowledge, short answer, or say what the team can do). Its prompt forbids writing drafts in chat | END |
+| `route` | only after `clarify`: `needs_{task_type}` again on the clarified request (no feedback check) | none → `reply`; else `plan` |
 | `plan` | lead `structured(LeadPlan)` for the routed task types; code fixes the structure (drops unrouted task types, empty brief → the request, caps the count). If `clarified == 0`: `decide()` `is_clear` | not clear and a question → `clarify`; else saves each `Task` (`PLANNED`) → `dispatch` |
 | `clarify` | `interrupt(Ask(plan_question))`; appends `"\n\nFounder: {answer}"` to the request; `clarified + 1` | `route` |
 | `dispatch` | picks the first task in `order` whose phase isn't `done`. Over `token_budget` → task `FAILED`, recoverable `Error`, phase `done` | `work` with steps left → `specialist`; `check` → `check`; `gate` → `gate`; none left → `report` |
@@ -98,8 +99,7 @@ Every task change is saved with `store.save_task` and a fresh `updated_at`. Task
 | Key | Question (options, safe last) | Used in |
 | --- | --- | --- |
 | `has_feedback` | Does the message give feedback or a preference about how the team works? (`yes`, `no`) | `triage` |
-| `wants_work` | Does the message ask the team to make or do something? (`yes`, `no`) | `triage` |
-| `needs_{task_type}` | Does the request need a {description}? (`yes`, `no`) | `route` |
+| `needs_{task_type}` | Is the founder asking the team to produce this: {description}? (`yes`, `no`) | `triage`, `route` |
 | `is_clear` | Is there enough information to do this well without asking? (`clear`, `unclear`) | `plan` |
 | `passes_check` | stage 4 | `check` |
 | `answer_clear` | stage 8 | company graph |
@@ -168,10 +168,26 @@ All through `TenureBrain` with `FakeLLM`, `FakeJev`, `InMemoryStore`, `FakeTools
 
 ## Done when
 
-- [ ] All tests above pass; earlier stages still pass
-- [ ] `ruff check` passes
-- [ ] Manual check: one real run against OpenRouter from a scratch script (hire → onboarding → "post about our Friday launch" → approve)
+- [x] All tests above pass; earlier stages still pass
+- [x] `ruff check` passes
+- [x] Manual check: one real run against OpenRouter from a scratch script (hire → onboarding → "post about our Friday launch" → approve)
+- [ ] Juan has reviewed the tests
 
 ## Log
 
-_Empty._
+- Oct 8: implemented under `/goal implement stage 6`. Tests written first and run red (29 failed on stubs, 203 earlier passing), then implemented: 232 passed on the first green run. `brain.py` now holds the facade (`TenureBrain`, `create_brain`), replacing Juan's placeholder.
+- **Live run 1 found a real bug:** a clear post request went to `reply`, and the reply LLM wrote the post itself in chat (no check, no approval). Cause: Jev scored `wants_work` at only 0.54–0.61 on plain requests. Fixes, all measured on live Jev with scratch scripts:
+  - `wants_work` is gone. `triage` makes one Jev call with `has_feedback` plus `needs_{task_type}`; no routed task type means no work.
+  - The routing state names the team and what it makes (`prompts/lead.py` `triage_state`), the question wording changed, and the marketing template's task descriptions now say what each deliverable is for. Explicit requests now route at 0.94–0.99; "Thanks", "Stop using hashtags" and "Design me a logo" route nowhere.
+  - New setting `ROUTE_THRESHOLD` (default 0.6, in `.env.example`) so the vague demo line still gets its newsletter (0.69).
+  - The reply prompt forbids writing drafts in chat.
+- **Live run 2:** the check failed good drafts twice (confidence 0.65 at approval). Cause: the reviewer couldn't see the business profile, so "matches the business tone" was unjudgeable. `run_check` gained an optional `profile` argument (stage 4's approved tests are untouched and still pass), and the team graph passes it. Good drafts went from 0.68–0.71 to 0.78–0.87; bad ones stay rejected (0.97–0.98).
+- **Live run 3:** passed the check on the first round at 0.82, and approve posted. The model varies run to run (another run took 2 revisions to reach 0.78); tune `DECIDE_THRESHOLD` and the check rules with real drafts.
+- Tests changed before review: the `script` fixture in `conftest.py` no longer scripts `wants_work`; `script(work=0.1)` now means "no task type routed", so `test_message_without_work_gets_one_say` keeps its meaning without edits.
+- Tests added after the red run (written with the fixes above, not run red first): `test_triage_is_one_jev_call_with_team_context`, `test_routing_uses_route_threshold`, `test_check_sees_business_profile` (team work) and `tests/brain/test_check_profile.py` (3 tests).
+- Tests added beyond the list above: `test_onboarding_asks_each_question_once` (hire), `test_graph_store_failure_yields_error` (work), `test_approve_through_facade_posts` (facade).
+- State holds tasks as JSON dicts (`TaskState.model_dump(mode="json")`) and interrupts carry `Ask` as a dict, so checkpoints never need to serialize Pydantic classes (safe for the Postgres checkpointer). The facade rebuilds the `Ask`.
+- `RECURSION_LIMIT = 200` in the facade: dispatch loops one superstep per step, check and gate, and LangGraph's default of 25 is too low for 3 tasks with revisions.
+- LangGraph facts checked on 1.2.14: `aget_state(...).interrupts` is the pending `Ask`; new input on a paused thread restarts from START and drops it.
+- `start_onboarding` and `handle_message(team_id=None)` yield one recoverable `Error` until stage 8.
+- Not done here: contract v0.3 (`Trust.promote_after`) is merged from `dev` but the brain still promotes at a fixed 5, waiting for Juan's OK on v0.3.

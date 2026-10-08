@@ -21,6 +21,9 @@ Read [CONTEXT.md](../CONTEXT.md) first. The build plan, one file per stage, live
 | 10 | Interrupt rule (§2); LEAD_PLAN returns its own clarifying question; ONBOARD asks one question per pass; revise reloads from the Store | Nodes re-run from the top on resume |
 | 11 | Earlier steps of a task produce `notes`; only the last step produces the task type's `output` (§4) | The researcher in a newsletter doesn't write the email |
 | 12 | Every `decide()` question puts its safe option last (§9) | One rule for low-confidence and failed decisions |
+| 13 | TRIAGE replaces HAS_FEEDBACK + WANTS_WORK + ROUTE: one Jev call; no routed task type means no work (§3.1, §9) | "Does it ask for work?" was unreliable on live Jev; per-task-type questions are sharp |
+| 14 | Routing has its own threshold, `ROUTE_THRESHOLD` = 0.6 (§9) | A missed request is worse than an extra draft that waits for approval |
+| 15 | The check also sees the business profile (§5) | Tone and invented prices can't be judged without it |
 
 ## 1. Principles
 
@@ -66,20 +69,18 @@ entry ─▶ revise input? ──yes──────────────�
  team onboarded? ──no──▶ ONBOARD (one YAML question per pass via Ask, saves the answer as a Lesson) ──▶ loop ──▶ END
    │ yes
    ▼
- HAS_FEEDBACK     decide("does this message contain feedback or a preference?")   (same Jev call as WANTS_WORK)
-   │              yes → REFLECT → save_lesson → LessonLearned (lead confirms)
-   ▼
- WANTS_WORK       decide("does this message ask for work?")
-   │              no → LEAD_REPLY (one Say: acknowledge, or answer briefly) → END
-   ▼
- ROUTE            one decide() call, one question per task type: "does this request need a <task_type>?"
-   │              none → LEAD_REPLY (says what the team can do) → END
-   ▼
+ TRIAGE           ONE decide() call on the team context + message:
+   │                has_feedback  "does this message contain feedback or a preference?"
+   │                needs_<type>  one yes/no per task type: "is the founder asking for <description>?"
+   │              feedback yes → REFLECT → save_lesson → LessonLearned (lead confirms)
+   │              no task type routed → LEAD_REPLY (one Say; never writes a draft) → END
+   ▼             (there is no separate "does it ask for work?" question: no routed type = no work)
  LEAD_PLAN        LLM structured output: 1 TaskPlan {task_type, title, brief} per routed task type (max 3),
    │              plus the question it would ask if something is missing
    │              code validates the structure (known task type, non-empty brief, ≤ max_tasks_per_request)
    │              decide("is the request clear enough?") below threshold → CLARIFY (interrupt with the plan's
-   │              question; the answer is appended to the request) → back to ROUTE. At most 1 clarification.
+   │              question; the answer is appended to the request) → ROUTE (needs_<type> again, no
+   │              feedback check) → LEAD_PLAN. At most 1 clarification.
    │              saves each Task (PLANNED)
    ▼
  DISPATCH ◀───────────────┐   plain code: next open task, next step of that task (task → IN_PROGRESS)
@@ -103,7 +104,7 @@ entry ─▶ revise input? ──yes──────────────�
 ```
 
 - **No plan approval.** The lead proposes; the founder judges the result. The graph interrupts only when the request is unclear (or during team onboarding).
-- **Answers to an `Ask` never go through HAS_FEEDBACK**: they resume the paused node.
+- **Answers to an `Ask` never go through TRIAGE**: they resume the paused node.
 - **Revise input** carries the `approval_id`. The entry node reloads the task and the rejected draft from the Store, so revising doesn't depend on what the checkpoint still holds.
 - **Limits:** `steps_used` and `tokens_used` are checked at DISPATCH against the template's `limits`. Over budget → the task is `FAILED`, the stream yields a recoverable `Error` for it, and the graph moves on to the next task.
 
@@ -137,7 +138,7 @@ Configured by the YAML entry plus the task's brief:
 Independent: it never reuses the lead's or the specialist's prompt.
 
 1. **Hard validators** (code, per output type): Bluesky ≤ 300 characters, email has a subject, no empty fields, no placeholder text like `[Name]`. A failure is a revise with the validator's message as feedback, and no `decide()` call.
-2. **Judgement:** `decide("does the draft pass?", ["pass", "revise"], ...)` against the task type's `check` rules plus the team's active lessons. The confidence becomes `check_confidence`. Below the threshold counts as revise.
+2. **Judgement:** `decide("does the draft pass?", ["pass", "revise"], ...)` against the business profile, the task type's `check` rules and the team's active lessons. The confidence becomes `check_confidence`. Below the threshold counts as revise. Without the profile, "matches the business tone" and "no invented prices" can't be judged: measured on Oct 8, adding it raised good drafts from 0.68–0.71 to 0.78–0.87.
 3. **Critic (only on revise):** one LLM structured-output call lists the issues ("uses hashtags; breaks 'No hashtags'"). The issues go back to the last step as feedback, and `revisions + 1`.
 4. **After 2 revisions** the draft goes to approval anyway, with its low confidence, rather than looping.
 
@@ -173,7 +174,7 @@ As in CONTRACT §9.
 | Business onboarding extras | Company graph, end of onboarding | `fact` lessons, business-wide |
 | Edit | `resolve_approval` | REFLECT on the diff → `preference` lesson(s) |
 | Reject with reason | `resolve_approval` | REFLECT on the reason → `preference` lesson(s) |
-| Chat feedback | Team graph HAS_FEEDBACK | REFLECT on the message → lesson(s) |
+| Chat feedback | Team graph TRIAGE (`has_feedback`) | REFLECT on the message → lesson(s) |
 | Approved draft | `Store.recent_approvals` at prompt time | Few-shot examples (not stored as lessons) |
 
 **REFLECT** is one function, `reflect(feedback, existing_lessons) -> list[Lesson]`, in `brain/learning.py`: one LLM structured-output call (`MODEL_REFLECT`). It is not a graph or a persona. It returns 0–2 lessons, each with:
@@ -267,15 +268,16 @@ async def decide(questions: dict[str, Question], state: str) -> dict[str, Decisi
 | Decision | Options | Below threshold / "no" |
 | --- | --- | --- |
 | Does this message contain feedback? | yes / no | no (don't invent lessons) |
-| Does it ask for work? | yes / no | lead replies with a `Say` |
-| Does the request need `<task_type>`? (one question per task type) | yes / no | not routed |
+| Is the founder asking for `<description>`? (one question per task type, same call) | yes / no | not routed (`ROUTE_THRESHOLD`); none routed → lead replies |
 | Is the request clear enough? | clear / unclear | lead asks (`Ask`) |
 | Does the draft pass? | pass / revise | critic writes feedback, revise |
 | Is an onboarding answer clear? | clear / unclear | follow-up question |
 
 **Safe option last.** Every question lists its safe option last (`no`, `unclear`, `revise`). If Jev and the fallback both fail, `decide()` returns the safe option with confidence 0. Callers accept a choice only when it is the risky option *and* the confidence is above the threshold.
 
-Threshold starts at 0.7 (`DECIDE_THRESHOLD`, tune Thursday). Promotions use a separate 0.8 bar on `check_confidence`.
+Threshold starts at 0.7 (`DECIDE_THRESHOLD`, tune Thursday). Routing uses its own, lower bar, 0.6 (`ROUTE_THRESHOLD`): a wrong "yes" costs a draft that still waits for approval, a wrong "no" ignores the founder. Promotions use a separate 0.8 bar on `check_confidence`.
+
+**Measured on Oct 8 (live Jev):** a bare "does this message ask for work?" question was unreliable (0.54–0.61 on plain requests). Per-task-type questions scored 0.94–0.99 on explicit requests once the state named the team and what it makes (`prompts/lead.py` `triage_state`) and the template descriptions said what each deliverable is for. The vague demo line "We launch Friday, get the word out" routes post 0.76 and newsletter 0.69.
 
 ### Jev on OpenRouter
 
@@ -284,7 +286,7 @@ Threshold starts at 0.7 (`DECIDE_THRESHOLD`, tune Thursday). Promotions use a se
 - **Request:** `{"model", "state", "questions": {key: {"type", "instructions", "criteria"}}}`. `state` is the context as text (max 32k prompt tokens; the brain truncates).
 - **Question types we use:** `noul` (yes/no, `criteria: {"true": ..., "false": ...}`) for two-option questions; `choice` (`criteria: {option: meaning}`) for more.
 - **Response:** `answers[key]`. `choice` gives `choice`, `probabilities` and `confidence`. `noul` gives only `noul`, the probability of yes: the brain maps it to `choice = yes if noul ≥ 0.5`, `confidence = max(noul, 1 - noul)`.
-- **Batching:** questions in one request are answered in parallel and can't see each other. HAS_FEEDBACK + WANTS_WORK are one call; ROUTE is one call with a `noul` per task type.
+- **Batching:** questions in one request are answered in parallel and can't see each other. TRIAGE is one call: `has_feedback` plus a `noul` per task type.
 - **Usage:** `usage.input_tokens` counts toward `tokens_used`.
 - **Fallback:** any HTTP error, timeout or missing / invalid answer → the same questions as one LLM structured-output call (`MODEL_DECIDE_FALLBACK`), which returns a choice and a self-reported confidence per question.
 

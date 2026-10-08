@@ -8,7 +8,7 @@ from brain.prompts.check import PASSES_CHECK, review_text
 from brain.prompts.critic import MAX_ISSUES, CriticReport, critic_messages
 from brain.templates.models import TaskTypeSpec, Template
 from brain.templates.registries import OUTPUTS
-from contract import Lesson
+from contract import BusinessProfile, Lesson
 
 log = logging.getLogger(__name__)
 
@@ -22,7 +22,12 @@ def hard_validate(output_type: str, output: BaseModel) -> list[str]:
     return OUTPUTS[output_type].validate(output)
 
 async def run_check(
-    deps: Deps, template: Template, task_type: str, output: BaseModel, lessons: list[Lesson]
+    deps: Deps,
+    template: Template,
+    task_type: str,
+    output: BaseModel,
+    lessons: list[Lesson],
+    profile: BusinessProfile | None = None,
 ) -> CheckResult:
     """
     Independent review of a finished draft: hard validators, then pass / revise through
@@ -33,7 +38,8 @@ async def run_check(
     if errors:
         return CheckResult(passed=False, confidence=0.0, feedback=errors)
 
-    review = review_text(task_type, spec, lessons, OUTPUTS[spec.output].preview(output))
+    draft = OUTPUTS[spec.output].preview(output)
+    review = review_text(task_type, spec, lessons, draft, profile)
     decisions = await decide(deps, {"passes_check": PASSES_CHECK}, review)
     decision = decisions["passes_check"]
     if decision.source == "default":

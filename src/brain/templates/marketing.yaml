@@ -13,7 +13,7 @@ specialists:
     tools: [web_search, fetch_page, read_memory]
 task_types:
   social_post:
-    description: "A short post for Bluesky"
+    description: "A short Bluesky post that announces, promotes or shares something"
     steps: [writer]
     output: social_post
     check: ["matches the business tone", "no invented facts or prices"]
@@ -21,7 +21,7 @@ task_types:
     start_level: act_after_approval
     max_level: autonomous
   newsletter:
-    description: "An email newsletter"
+    description: "An email newsletter to the founder's list that announces or promotes something"
     steps: [researcher, writer]
     output: email
     check: ["clear subject line", "one call to action"]
@@ -29,7 +29,7 @@ task_types:
     start_level: act_after_approval
     max_level: act_and_report
   competitor_check:
-    description: "What competitors are doing lately"
+    description: "Research on what competitors are doing lately"
     steps: [researcher]
     output: report
     check: ["every claim has a source"]

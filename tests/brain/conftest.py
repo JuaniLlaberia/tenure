@@ -2,11 +2,21 @@ from datetime import UTC, datetime, timedelta
 
 import pytest
 
+from brain.brain import TenureBrain
 from brain.common import new_id
 from brain.deps import Deps, Settings
 from brain.fakes import FakeJev, FakeLLM, FakeTools, InMemoryStore
 from brain.templates.loader import load_templates
-from contract import Approval, PostSocial, SendEmail, Task, TaskStatus, Team, Trust
+from contract import (
+    Approval,
+    IncomingMessage,
+    PostSocial,
+    SendEmail,
+    Task,
+    TaskStatus,
+    Team,
+    Trust,
+)
 
 NOW = datetime(2026, 10, 8, 12, 0, tzinfo=UTC)
 
@@ -92,6 +102,66 @@ def make_team(deps):
         return team
 
     return make
+
+TITLES = {
+    "social_post": "Launch post",
+    "newsletter": "Launch newsletter",
+    "competitor_check": "Competitor check",
+}
+
+OUTPUTS = {
+    "SocialPostOutput": {"text": "We launch Friday!"},
+    "EmailOutput": {"to": "list@b.co", "subject": "We launch Friday", "body": "Join us Friday."},
+    "NotesOutput": {"notes": "Rivals post on Mondays", "sources": ["https://a.co/rivals"]},
+    "ReportOutput": {"summary": "Rivals cut prices this week", "sources": ["https://a.co/rivals"]},
+    "CriticReport": {"issues": ["Mention the date"]},
+}
+
+@pytest.fixture
+def brain(deps):
+    return TenureBrain(deps)
+
+@pytest.fixture
+def script(jev, llm):
+    """
+    Scripts Jev and the LLM for a normal request: routes `task_types`, plans one task per type,
+    and every check passes unless told otherwise. `work` below 0.5 means the message asks for
+    nothing, so no task type is routed.
+    """
+
+    def script(
+        task_types=("social_post",),
+        feedback=0.1,
+        work=0.9,
+        clear=0.9,
+        passes=0.9,
+        plan=None,
+        question=None,
+    ):
+        jev.answers.update({"has_feedback": feedback, "is_clear": clear, "passes_check": passes})
+        routed = task_types if work >= 0.5 else ()
+        for task_type in TITLES:
+            jev.answers[f"needs_{task_type}"] = 0.9 if task_type in routed else 0.1
+        tasks = [
+            {"task_type": t, "title": TITLES[t], "brief": f"Brief for {t}"} for t in task_types
+        ]
+        llm.structured_responses.update(OUTPUTS)
+        llm.structured_responses["LeadPlan"] = plan or {"tasks": tasks, "question": question}
+
+    return script
+
+@pytest.fixture
+def message():
+    def message(team, text, message_id="m1"):
+        return IncomingMessage(
+            business_id=team.business_id,
+            team_id=team.team_id,
+            text=text,
+            message_id=message_id,
+            sent_at=NOW,
+        )
+
+    return message
 
 def preview_for(planned_action) -> str:
     if isinstance(planned_action, PostSocial):
