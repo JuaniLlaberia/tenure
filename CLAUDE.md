@@ -28,7 +28,7 @@ Only change files in the folder you were asked to work on. If a task seems to ne
 - Tests: `uv run pytest`
 - Lint (and sort imports): `uv run ruff check . --fix`. Don't run `ruff format`: it forces two blank lines between definitions, which breaks our style.
 - Brain in the terminal: `uv run python -m brain.cli`
-- App: `uv run python -m app.main`
+- App (Telegram bot and dashboard): `uv run --env-file .env python -m app.main`
 
 ## Architecture rules (do not break)
 
