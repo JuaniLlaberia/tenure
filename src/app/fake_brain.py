@@ -1,15 +1,18 @@
 """
 A stand-in Brain that streams canned events, so the app can be built and demoed
-before the real brain is merged (CONTRACT §12). No LLM calls, state lives in memory.
+before the real brain is merged (CONTRACT §12). No LLM calls. Like the real brain it
+keeps its records in the Store; conversation progress stays in memory.
 """
 
 import asyncio
 import logging
 from collections.abc import AsyncIterator, Callable
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
+from typing import Literal
 from uuid import uuid4
 
+from app.store.memory import InMemoryStore
 from contract import (
     ActionDone,
     ActionResult,
@@ -23,6 +26,7 @@ from contract import (
     Error,
     Event,
     IncomingMessage,
+    Lesson,
     LessonLearned,
     NeedsApproval,
     OnboardingComplete,
@@ -34,6 +38,7 @@ from contract import (
     PromotionResponse,
     Say,
     SendEmail,
+    Store,
     Task,
     TaskStatus,
     Team,
@@ -47,6 +52,7 @@ logger = logging.getLogger(__name__)
 UNDO_WINDOW = timedelta(minutes=10)
 MAX_REVISIONS = 2
 PROMOTION_STREAK = 5
+TOKENS_PER_STEP = 850
 POST_LIMIT = 300
 LADDER = list(AutonomyLevel)
 ACTS_ALONE = (AutonomyLevel.ACT_AND_REPORT, AutonomyLevel.AUTONOMOUS)
@@ -80,7 +86,7 @@ class FakeTemplate:
     lead: Persona
     specialists: dict[str, Persona]
     task_types: dict[str, FakeTaskType]
-    onboarding: list[tuple[str, list[str]]]
+    onboarding: list[tuple[str, str, list[str]]]
     default_plan: list[str]
 
     def info(self) -> TemplateInfo:
@@ -118,9 +124,9 @@ TEMPLATES = {
             ),
         },
         onboarding=[
-            ("Which channels do you post on?", ["Bluesky", "Bluesky and LinkedIn"]),
-            ("Any launch or event coming up?", ["Not right now"]),
-            ("Which address should newsletters go to?", []),
+            ("channels", "Which channels do you post on?", ["Bluesky", "Bluesky and LinkedIn"]),
+            ("upcoming", "Any launch or event coming up?", ["Not right now"]),
+            ("newsletter_to", "Which address should newsletters go to?", []),
         ],
         default_plan=["social_post", "newsletter"],
     ),
@@ -139,8 +145,8 @@ TEMPLATES = {
             ),
         },
         onboarding=[
-            ("How firm should reminders be?", ["Gentle", "Direct"]),
-            ("How many days after the due date should I remind?", ["3", "7", "14"]),
+            ("tone", "How firm should reminders be?", ["Gentle", "Direct"]),
+            ("remind_after_days", "How many days after the due date should I remind?", ["3", "7"]),
         ],
         default_plan=["invoice_reminder"],
     ),
@@ -172,17 +178,23 @@ def _next_level(level: AutonomyLevel, cap: AutonomyLevel) -> AutonomyLevel | Non
     return LADDER[index + 1]
 
 @dataclass
-class _Business:
-    answers: list[str] = field(default_factory=list)
-    profile: BusinessProfile | None = None
-
-@dataclass
-class _Team:
-    team: Team
-    template: FakeTemplate
-    trust: dict[str, Trust]
+class _Thread:
     onboarding_step: int = 0
     pending_request: str | None = None
+
+@dataclass
+class _Ctx:
+    team: Team
+    template: FakeTemplate
+    thread: _Thread
+
+    @property
+    def team_id(self) -> str:
+        return self.team.team_id
+
+    @property
+    def lead(self) -> Persona:
+        return self.template.lead
 
 class FakeBrain:
     """
@@ -191,18 +203,18 @@ class FakeBrain:
 
     def __init__(
         self,
+        store: Store | None = None,
+        *,
         delay: float = 0.0,
         promotion_streak: int = PROMOTION_STREAK,
         clock: Callable[[], datetime] = _utcnow,
     ) -> None:
+        self._store = store or InMemoryStore()
         self._delay = delay
         self._promotion_streak = promotion_streak
         self._clock = clock
-        self._businesses: dict[str, _Business] = {}
-        self._teams: dict[str, _Team] = {}
-        self._tasks: dict[str, Task] = {}
-        self._approvals: dict[str, Approval] = {}
-        self._actions: dict[str, AuditEntry] = {}
+        self._onboarding: dict[str, list[str]] = {}
+        self._threads: dict[str, _Thread] = {}
 
     def list_templates(self) -> list[TemplateInfo]:
         return [template.info() for template in TEMPLATES.values()]
@@ -243,16 +255,38 @@ class FakeBrain:
                 recoverable=True,
             )
 
+    async def _context(self, business_id: str, team_id: str | None) -> _Ctx | None:
+        if team_id is None:
+            return None
+        team = await self._store.get_team(team_id)
+        if team is None or team.business_id != business_id or team.template not in TEMPLATES:
+            return None
+        thread = self._threads.setdefault(team_id, _Thread())
+        return _Ctx(team=team, template=TEMPLATES[team.template], thread=thread)
+
+    async def _trust(self, ctx: _Ctx, task_type: str) -> Trust:
+        trust = await self._store.get_trust(ctx.team_id, task_type)
+        if trust is None:
+            level = ctx.template.task_types[task_type].start_level
+            trust = Trust(
+                team_id=ctx.team_id, task_type=task_type, level=level, updated_at=self._clock()
+            )
+            await self._store.set_trust(trust)
+        return trust
+
+    async def _business_name(self, business_id: str) -> str:
+        profile = await self._store.get_profile(business_id)
+        return profile.name if profile else "us"
+
     async def _start_onboarding(self, business_id: str) -> AsyncIterator[Event]:
-        business = self._businesses.setdefault(business_id, _Business())
-        if business.profile is not None:
+        if await self._store.get_profile(business_id) is not None:
             yield Say(
                 team_id=None,
                 persona=CHIEF,
                 text="We're already set up. Hire a team with /hire marketing.",
             )
             return
-        business.answers = []
+        self._onboarding[business_id] = []
         yield Ask(team_id=None, persona=CHIEF, question=BUSINESS_QUESTIONS[0])
 
     async def _handle_message(self, msg: IncomingMessage) -> AsyncIterator[Event]:
@@ -260,52 +294,54 @@ class FakeBrain:
             async for event in self._company_message(msg):
                 yield event
             return
-        team = self._teams.get(msg.team_id)
-        if team is None or team.team.business_id != msg.business_id:
+        ctx = await self._context(msg.business_id, msg.team_id)
+        if ctx is None:
             yield Error(team_id=msg.team_id, message="I don't know this team.", recoverable=False)
             return
         text = msg.text.strip()
-        if not team.team.onboarded:
-            events = self._team_onboarding(team)
-        elif team.pending_request is not None:
-            request = f"{team.pending_request}\n{text}"
-            team.pending_request = None
-            events = self._work(team, request)
+        if not ctx.team.onboarded:
+            events = self._team_onboarding(ctx, msg)
+        elif ctx.thread.pending_request is not None:
+            request = f"{ctx.thread.pending_request}\n{text}"
+            ctx.thread.pending_request = None
+            events = self._work(ctx, request)
         elif _is_feedback(text):
-            events = self._learn_from_chat(team, text)
+            events = self._learn_from_chat(ctx, msg)
         elif len(text.split()) < 4:
-            team.pending_request = text
-            events = self._clarify(team)
+            ctx.thread.pending_request = text
+            events = self._clarify(ctx)
         else:
-            events = self._work(team, text)
+            events = self._work(ctx, text)
         async for event in events:
             yield event
 
     async def _company_message(self, msg: IncomingMessage) -> AsyncIterator[Event]:
-        business = self._businesses.get(msg.business_id)
-        if business is None:
-            async for event in self._start_onboarding(msg.business_id):
-                yield event
-            return
-        if business.profile is not None:
+        if await self._store.get_profile(msg.business_id) is not None:
             yield Say(
                 team_id=None,
                 persona=CHIEF,
                 text="Hire a team with /hire marketing, then talk to it in its topic.",
             )
             return
-        business.answers.append(msg.text.strip())
-        if len(business.answers) < len(BUSINESS_QUESTIONS):
-            question = BUSINESS_QUESTIONS[len(business.answers)]
-            yield Ask(team_id=None, persona=CHIEF, question=question)
+        answers = self._onboarding.get(msg.business_id)
+        if answers is None:
+            async for event in self._start_onboarding(msg.business_id):
+                yield event
             return
-        name, what_you_sell, customers = business.answers
-        business.profile = BusinessProfile(
-            business_id=msg.business_id,
-            name=name,
-            what_you_sell=what_you_sell,
-            customers=customers,
+        answers.append(msg.text.strip())
+        if len(answers) < len(BUSINESS_QUESTIONS):
+            yield Ask(team_id=None, persona=CHIEF, question=BUSINESS_QUESTIONS[len(answers)])
+            return
+        name, what_you_sell, customers = answers
+        await self._store.save_profile(
+            BusinessProfile(
+                business_id=msg.business_id,
+                name=name,
+                what_you_sell=what_you_sell,
+                customers=customers,
+            )
         )
+        del self._onboarding[msg.business_id]
         yield Say(
             team_id=None,
             persona=CHIEF,
@@ -320,126 +356,175 @@ class FakeBrain:
             yield Error(team_id=None, message=message, recoverable=True)
             return
         now = self._clock()
-        team_id = _new_id()
-        trust = {
-            task_type: Trust(
-                team_id=team_id, task_type=task_type, level=spec.start_level, updated_at=now
-            )
-            for task_type, spec in template.task_types.items()
-        }
         team = Team(
-            team_id=team_id,
+            team_id=_new_id(),
             business_id=business_id,
             template=name,
             display_name=template.display_name,
             created_at=now,
         )
-        self._teams[team_id] = _Team(team=team, template=template, trust=trust)
+        await self._store.save_team(team)
+        for task_type, spec in template.task_types.items():
+            trust = Trust(
+                team_id=team.team_id, task_type=task_type, level=spec.start_level, updated_at=now
+            )
+            await self._store.set_trust(trust)
+        ctx = _Ctx(team=team, template=template, thread=_Thread())
+        self._threads[team.team_id] = ctx.thread
         yield TeamHired(
-            team_id=team_id,
+            team_id=team.team_id,
             template=name,
             display_name=template.display_name,
             personas=template.info().personas,
         )
         yield Say(
-            team_id=team_id,
-            persona=template.lead,
-            text=f"Hi, I'm {template.lead.name}. A few quick questions so we fit your business.",
+            team_id=team.team_id,
+            persona=ctx.lead,
+            text=f"Hi, I'm {ctx.lead.name}. A few quick questions so we fit your business.",
         )
-        yield self._onboarding_question(self._teams[team_id])
+        yield self._onboarding_question(ctx)
 
-    def _onboarding_question(self, team: _Team) -> Ask:
-        question, quick_replies = team.template.onboarding[team.onboarding_step]
+    def _onboarding_question(self, ctx: _Ctx) -> Ask:
+        _, question, quick_replies = ctx.template.onboarding[ctx.thread.onboarding_step]
         return Ask(
-            team_id=team.team.team_id,
-            persona=team.template.lead,
-            question=question,
-            quick_replies=quick_replies,
+            team_id=ctx.team_id, persona=ctx.lead, question=question, quick_replies=quick_replies
         )
 
-    async def _team_onboarding(self, team: _Team) -> AsyncIterator[Event]:
-        team.onboarding_step += 1
-        if team.onboarding_step < len(team.template.onboarding):
-            yield self._onboarding_question(team)
+    async def _team_onboarding(self, ctx: _Ctx, msg: IncomingMessage) -> AsyncIterator[Event]:
+        step = min(ctx.thread.onboarding_step, len(ctx.template.onboarding) - 1)
+        key = ctx.template.onboarding[step][0]
+        await self._save_fact(ctx, key, msg)
+        ctx.thread.onboarding_step = step + 1
+        if ctx.thread.onboarding_step < len(ctx.template.onboarding):
+            yield self._onboarding_question(ctx)
             return
-        team.team.onboarded = True
+        ctx.team.onboarded = True
+        await self._store.save_team(ctx.team)
         yield Say(
-            team_id=team.team.team_id,
-            persona=team.template.lead,
+            team_id=ctx.team_id,
+            persona=ctx.lead,
             text="Thanks, we're ready. Tell me what you need, like 'We launch Friday'.",
         )
-        yield OnboardingComplete(scope="team", team_id=team.team.team_id)
+        yield OnboardingComplete(scope="team", team_id=ctx.team_id)
 
-    async def _clarify(self, team: _Team) -> AsyncIterator[Event]:
+    async def _save_fact(self, ctx: _Ctx, key: str, msg: IncomingMessage) -> None:
+        for old in await self._store.list_lessons(ctx.team.business_id, ctx.team_id):
+            if old.key == key and old.team_id == ctx.team_id:
+                await self._store.save_lesson(old.model_copy(update={"active": False}))
+        label = key.replace("_", " ").capitalize()
+        await self._store.save_lesson(
+            Lesson(
+                lesson_id=_new_id(),
+                business_id=ctx.team.business_id,
+                team_id=ctx.team_id,
+                kind="fact",
+                key=key,
+                text=f"{label}: {msg.text.strip()}",
+                source="team_onboarding",
+                source_ref=msg.message_id,
+                created_at=self._clock(),
+            )
+        )
+
+    async def _clarify(self, ctx: _Ctx) -> AsyncIterator[Event]:
         yield Ask(
-            team_id=team.team.team_id,
-            persona=team.template.lead,
+            team_id=ctx.team_id,
+            persona=ctx.lead,
             question="Can you tell me a bit more? What's it about, and when should it go out?",
             quick_replies=["It's for this week's launch", "Just a general update"],
         )
 
-    async def _learn_from_chat(self, team: _Team, text: str) -> AsyncIterator[Event]:
-        yield LessonLearned(
+    async def _learn_from_chat(self, ctx: _Ctx, msg: IncomingMessage) -> AsyncIterator[Event]:
+        text = msg.text.strip()
+        business_wide = text.lower().startswith("we ")
+        async for event in self._lesson(
+            ctx, None, text, "chat", msg.message_id, business_wide=business_wide
+        ):
+            yield event
+
+    async def _lesson(
+        self,
+        ctx: _Ctx,
+        task: Task | None,
+        text: str,
+        source: Literal["edit", "reject", "chat"],
+        source_ref: str,
+        business_wide: bool = False,
+    ) -> AsyncIterator[Event]:
+        lesson = Lesson(
             lesson_id=_new_id(),
-            team_id=team.team.team_id,
-            persona=team.template.lead,
+            business_id=ctx.team.business_id,
+            team_id=None if business_wide else ctx.team_id,
+            task_type=task.task_type if task and source == "edit" else None,
+            kind="preference",
             text=text,
-            business_wide=text.lower().startswith("we "),
+            source=source,
+            source_ref=source_ref,
+            created_at=self._clock(),
+        )
+        await self._store.save_lesson(lesson)
+        yield LessonLearned(
+            lesson_id=lesson.lesson_id,
+            team_id=ctx.team_id,
+            persona=ctx.lead,
+            text=text,
+            business_wide=business_wide,
         )
         yield Say(
-            team_id=team.team.team_id,
-            persona=team.template.lead,
-            text="Got it, I'll keep that in mind from now on.",
+            team_id=ctx.team_id,
+            task_id=task.task_id if task else None,
+            persona=ctx.lead,
+            text="Got it, I'll remember that from now on.",
         )
 
-    def _plan(self, team: _Team, request: str) -> list[str]:
-        if "competitor" in request.lower() and "competitor_check" in team.template.task_types:
+    def _plan(self, ctx: _Ctx, request: str) -> list[str]:
+        if "competitor" in request.lower() and "competitor_check" in ctx.template.task_types:
             return ["competitor_check"]
-        return team.template.default_plan
+        return ctx.template.default_plan
 
-    async def _work(self, team: _Team, request: str) -> AsyncIterator[Event]:
-        template = team.template
-        team_id = team.team.team_id
-        plan = self._plan(team, request)
-        titles = ", ".join(template.task_types[task_type].title.lower() for task_type in plan)
-        yield Say(team_id=team_id, persona=template.lead, text=f"On it. Plan: {titles}.")
+    async def _work(self, ctx: _Ctx, request: str) -> AsyncIterator[Event]:
+        plan = self._plan(ctx, request)
+        titles = ", ".join(ctx.template.task_types[task_type].title.lower() for task_type in plan)
+        yield Say(team_id=ctx.team_id, persona=ctx.lead, text=f"On it. Plan: {titles}.")
         tasks = []
         for task_type in plan:
-            spec = template.task_types[task_type]
+            spec = ctx.template.task_types[task_type]
             now = self._clock()
             task = Task(
                 task_id=_new_id(),
-                business_id=team.team.business_id,
-                team_id=team_id,
+                business_id=ctx.team.business_id,
+                team_id=ctx.team_id,
                 task_type=task_type,
-                title=spec.title,
+                title=_clip(request, 60),
                 brief=request,
                 status=TaskStatus.IN_PROGRESS,
                 steps=spec.steps,
                 created_at=now,
                 updated_at=now,
             )
-            self._tasks[task.task_id] = task
+            await self._store.save_task(task)
             tasks.append(task)
             for index, step in enumerate(spec.steps):
-                task.current_step = index
-                persona = template.specialists[step]
+                persona = ctx.template.specialists[step]
                 verb = STEP_VERBS.get(step, "working")
                 yield Progress(
-                    team_id=team_id,
+                    team_id=ctx.team_id,
                     task_id=task.task_id,
                     persona=persona,
                     status=f"{persona.name} is {verb}…",
                 )
-            async for event in self._gate(team, task):
+                task.current_step = index
+                task.tokens_used += TOKENS_PER_STEP
+                task.updated_at = self._clock()
+                await self._store.save_task(task)
+            async for event in self._gate(ctx, task):
                 yield event
         waiting = sum(task.status == TaskStatus.WAITING_APPROVAL for task in tasks)
         report = f"{waiting} draft(s) are waiting for your OK." if waiting else "All done."
-        yield Say(team_id=team_id, persona=template.lead, text=report)
+        yield Say(team_id=ctx.team_id, persona=ctx.lead, text=report)
 
-    def _draft(self, task: Task) -> tuple[str, PlannedAction | None]:
-        business = self._businesses.get(task.business_id)
-        name = business.profile.name if business and business.profile else "us"
+    async def _draft(self, task: Task) -> tuple[str, PlannedAction | None]:
+        name = await self._business_name(task.business_id)
         brief = task.brief
         if task.task_type == "social_post":
             opener = POST_OPENERS[task.revisions % len(POST_OPENERS)]
@@ -461,20 +546,22 @@ class FakeBrain:
             return report, None
         return _preview(action), action
 
-    async def _gate(self, team: _Team, task: Task) -> AsyncIterator[Event]:
-        preview, action = self._draft(task)
-        level = team.trust[task.task_type].level
+    async def _save_status(self, task: Task, status: TaskStatus) -> None:
+        task.status = status
+        task.updated_at = self._clock()
+        await self._store.save_task(task)
+
+    async def _gate(self, ctx: _Ctx, task: Task) -> AsyncIterator[Event]:
+        preview, action = await self._draft(task)
+        level = (await self._trust(ctx, task.task_type)).level
         if level in ACTS_ALONE:
             if action is None:
-                task.status = TaskStatus.DONE
+                await self._save_status(task, TaskStatus.DONE)
                 yield Say(
-                    team_id=task.team_id,
-                    task_id=task.task_id,
-                    persona=team.template.lead,
-                    text=preview,
+                    team_id=task.team_id, task_id=task.task_id, persona=ctx.lead, text=preview
                 )
             else:
-                yield self._execute(team, task, action, approval_id=None)
+                yield await self._execute(task, action, approval_id=None)
             return
         planned_action = None if level == AutonomyLevel.DRAFT_ONLY else action
         approval = Approval(
@@ -488,21 +575,21 @@ class FakeBrain:
             check_confidence=round(0.9 - 0.05 * task.revisions, 2),
             created_at=self._clock(),
         )
-        self._approvals[approval.approval_id] = approval
-        task.status = TaskStatus.WAITING_APPROVAL
+        await self._store.save_approval(approval)
+        await self._save_status(task, TaskStatus.WAITING_APPROVAL)
         yield NeedsApproval(
             approval_id=approval.approval_id,
             team_id=task.team_id,
             task_id=task.task_id,
             task_type=task.task_type,
-            persona=team.template.lead,
+            persona=ctx.lead,
             preview=preview,
             planned_action=planned_action,
             check_confidence=approval.check_confidence,
         )
 
-    def _execute(
-        self, team: _Team, task: Task, action: PlannedAction, approval_id: str | None
+    async def _execute(
+        self, task: Task, action: PlannedAction, approval_id: str | None
     ) -> ActionDone:
         now = self._clock()
         action_id = _new_id()
@@ -516,21 +603,24 @@ class FakeBrain:
             summary = f"Sent the email to {action.to}"
             url = external_id = undo_until = None
         autonomous = approval_id is None
-        self._actions[action_id] = AuditEntry(
-            action_id=action_id,
-            business_id=task.business_id,
-            team_id=task.team_id,
-            task_id=task.task_id,
-            tool=action.tool,
-            summary=summary,
-            result=ActionResult(action_id=action_id, ok=True, url=url, external_id=external_id),
-            autonomous=autonomous,
-            approval_id=approval_id,
-            undo_until=undo_until,
-            at=now,
+        await self._store.log_action(
+            AuditEntry(
+                action_id=action_id,
+                business_id=task.business_id,
+                team_id=task.team_id,
+                task_id=task.task_id,
+                tool=action.tool,
+                summary=summary,
+                result=ActionResult(
+                    action_id=action_id, ok=True, url=url, external_id=external_id
+                ),
+                autonomous=autonomous,
+                approval_id=approval_id,
+                undo_until=undo_until,
+                at=now,
+            )
         )
-        task.status = TaskStatus.DONE
-        task.updated_at = now
+        await self._save_status(task, TaskStatus.DONE)
         return ActionDone(
             action_id=action_id,
             team_id=task.team_id,
@@ -542,7 +632,7 @@ class FakeBrain:
         )
 
     async def _resolve_approval(self, decision: ApprovalDecision) -> AsyncIterator[Event]:
-        approval = self._approvals.get(decision.approval_id)
+        approval = await self._store.get_approval(decision.approval_id)
         if approval is None or approval.business_id != decision.business_id:
             yield Error(team_id=None, message="I can't find that draft.", recoverable=True)
             return
@@ -553,63 +643,69 @@ class FakeBrain:
                 recoverable=True,
             )
             return
-        team = self._teams[approval.team_id]
-        task = self._tasks[approval.task_id]
+        ctx = await self._context(approval.business_id, approval.team_id)
+        task = await self._store.get_task(approval.task_id)
+        if ctx is None or task is None:
+            message = "I can't find that task."
+            yield Error(team_id=approval.team_id, message=message, recoverable=True)
+            return
         if decision.decision == "approve":
-            events = self._approve(team, task, approval)
+            events = self._approve(ctx, task, approval)
         elif decision.decision == "edit":
-            events = self._edit(team, task, approval, decision.edited_text)
+            events = self._edit(ctx, task, approval, decision.edited_text)
         else:
-            events = self._reject(team, task, approval, decision.reason)
+            events = self._reject(ctx, task, approval, decision.reason)
         async for event in events:
             yield event
 
-    def _set_streak(self, team: _Team, task_type: str, streak: int) -> None:
-        trust = team.trust[task_type]
+    async def _set_streak(self, ctx: _Ctx, task_type: str, streak: int) -> None:
+        trust = await self._trust(ctx, task_type)
         trust.approval_streak = streak
         trust.updated_at = self._clock()
+        await self._store.set_trust(trust)
 
-    def _resolve(self, approval: Approval, status: str, **fields: str | None) -> None:
+    async def _resolve(self, approval: Approval, status: str, **fields: str | None) -> None:
         approval.status = status
         approval.resolved_at = self._clock()
         for name, value in fields.items():
             setattr(approval, name, value)
+        await self._store.save_approval(approval)
 
-    async def _approve(self, team: _Team, task: Task, approval: Approval) -> AsyncIterator[Event]:
-        self._resolve(approval, "approved")
+    async def _approve(self, ctx: _Ctx, task: Task, approval: Approval) -> AsyncIterator[Event]:
+        await self._resolve(approval, "approved")
         if approval.planned_action is None:
-            task.status = TaskStatus.DONE
+            await self._save_status(task, TaskStatus.DONE)
             yield Say(
                 team_id=task.team_id,
                 task_id=task.task_id,
-                persona=team.template.lead,
+                persona=ctx.lead,
                 text="Great, marked as done.",
             )
         else:
-            yield self._execute(team, task, approval.planned_action, approval.approval_id)
-        trust = team.trust[task.task_type]
-        self._set_streak(team, task.task_type, trust.approval_streak + 1)
-        offer = self._promotion_offer(team, task.task_type)
+            yield await self._execute(task, approval.planned_action, approval.approval_id)
+        trust = await self._trust(ctx, task.task_type)
+        await self._set_streak(ctx, task.task_type, trust.approval_streak + 1)
+        offer = await self._promotion_offer(ctx, task.task_type)
         if offer is not None:
             yield offer
 
-    def _promotion_offer(self, team: _Team, task_type: str) -> PromotionOffer | None:
-        trust = team.trust[task_type]
-        cap = team.template.task_types[task_type].max_level
+    async def _promotion_offer(self, ctx: _Ctx, task_type: str) -> PromotionOffer | None:
+        trust = await self._trust(ctx, task_type)
+        cap = ctx.template.task_types[task_type].max_level
         proposed = _next_level(trust.level, cap)
         if trust.approval_streak < self._promotion_streak or proposed is None:
             return None
         return PromotionOffer(
-            team_id=team.team.team_id,
+            team_id=ctx.team_id,
             task_type=task_type,
-            persona=team.template.lead,
+            persona=ctx.lead,
             current_level=trust.level,
             proposed_level=proposed,
             evidence=f"You approved my last {trust.approval_streak} drafts without edits.",
         )
 
     async def _edit(
-        self, team: _Team, task: Task, approval: Approval, edited_text: str | None
+        self, ctx: _Ctx, task: Task, approval: Approval, edited_text: str | None
     ) -> AsyncIterator[Event]:
         if not edited_text or not edited_text.strip():
             yield Error(
@@ -624,96 +720,85 @@ class FakeBrain:
                 recoverable=True,
             )
             return
-        self._resolve(approval, "edited", edited_text=edited_text)
+        await self._resolve(approval, "edited", edited_text=edited_text)
         if isinstance(action, PostSocial):
-            yield self._execute(team, task, PostSocial(text=edited_text), approval.approval_id)
+            yield await self._execute(task, PostSocial(text=edited_text), approval.approval_id)
         elif isinstance(action, SendEmail):
             edited = action.model_copy(update={"body": edited_text})
-            yield self._execute(team, task, edited, approval.approval_id)
+            yield await self._execute(task, edited, approval.approval_id)
         else:
-            task.status = TaskStatus.DONE
-        self._set_streak(team, task.task_type, 0)
+            await self._save_status(task, TaskStatus.DONE)
+        await self._set_streak(ctx, task.task_type, 0)
         lesson = "Match the founder's edits in wording and length"
-        async for event in self._lesson(team, task, lesson):
+        async for event in self._lesson(ctx, task, lesson, "edit", approval.approval_id):
             yield event
 
     async def _reject(
-        self, team: _Team, task: Task, approval: Approval, reason: str | None
+        self, ctx: _Ctx, task: Task, approval: Approval, reason: str | None
     ) -> AsyncIterator[Event]:
-        self._resolve(approval, "rejected", reason=reason)
-        self._set_streak(team, task.task_type, 0)
-        lead = team.template.lead
+        await self._resolve(approval, "rejected", reason=reason)
+        await self._set_streak(ctx, task.task_type, 0)
         if not reason:
-            task.status = TaskStatus.REJECTED
-            yield Say(
-                team_id=task.team_id, task_id=task.task_id, persona=lead, text="Okay, dropped it."
-            )
-            return
-        async for event in self._lesson(team, task, reason):
-            yield event
-        if task.revisions >= MAX_REVISIONS:
-            task.status = TaskStatus.REJECTED
+            await self._save_status(task, TaskStatus.REJECTED)
             yield Say(
                 team_id=task.team_id,
                 task_id=task.task_id,
-                persona=lead,
+                persona=ctx.lead,
+                text="Okay, dropped it.",
+            )
+            return
+        async for event in self._lesson(ctx, task, reason, "reject", approval.approval_id):
+            yield event
+        if task.revisions >= MAX_REVISIONS:
+            await self._save_status(task, TaskStatus.REJECTED)
+            yield Say(
+                team_id=task.team_id,
+                task_id=task.task_id,
+                persona=ctx.lead,
                 text="I'm out of revisions on this one, so I'll drop it.",
             )
             return
         task.revisions += 1
-        task.status = TaskStatus.IN_PROGRESS
-        writer = team.template.specialists.get(task.steps[-1], lead)
+        await self._save_status(task, TaskStatus.IN_PROGRESS)
+        writer = ctx.template.specialists.get(task.steps[-1], ctx.lead)
         yield Progress(
             team_id=task.team_id,
             task_id=task.task_id,
             persona=writer,
             status=f"{writer.name} is revising…",
         )
-        async for event in self._gate(team, task):
+        async for event in self._gate(ctx, task):
             yield event
 
-    async def _lesson(self, team: _Team, task: Task, text: str) -> AsyncIterator[Event]:
-        yield LessonLearned(
-            lesson_id=_new_id(),
-            team_id=task.team_id,
-            persona=team.template.lead,
-            text=text,
-            business_wide=False,
-        )
-        yield Say(
-            team_id=task.team_id,
-            task_id=task.task_id,
-            persona=team.template.lead,
-            text="Got it, I'll remember that next time.",
-        )
-
     async def _respond_promotion(self, response: PromotionResponse) -> AsyncIterator[Event]:
-        team = self._teams.get(response.team_id)
-        if team is None or team.team.business_id != response.business_id:
+        ctx = await self._context(response.business_id, response.team_id)
+        if ctx is None:
             yield Error(
                 team_id=response.team_id, message="I don't know this team.", recoverable=False
             )
             return
-        trust = team.trust.get(response.task_type)
-        if trust is None:
+        if response.task_type not in ctx.template.task_types:
             yield Error(
                 team_id=response.team_id,
                 message="This team doesn't do that kind of task.",
                 recoverable=True,
             )
             return
-        cap = team.template.task_types[response.task_type].max_level
+        trust = await self._trust(ctx, response.task_type)
+        cap = ctx.template.task_types[response.task_type].max_level
         proposed = _next_level(trust.level, cap)
         if response.accepted and proposed is not None:
             trust.level = proposed
             text = f"Thanks for the trust! {response.task_type} is now at '{proposed}'."
         else:
             text = "No problem, I'll keep asking before I act."
-        self._set_streak(team, response.task_type, 0)
-        yield Say(team_id=response.team_id, persona=team.template.lead, text=text)
+        trust.approval_streak = 0
+        trust.updated_at = self._clock()
+        await self._store.set_trust(trust)
+        yield Say(team_id=response.team_id, persona=ctx.lead, text=text)
 
     async def _undo_action(self, business_id: str, action_id: str) -> AsyncIterator[Event]:
-        entry = self._actions.get(action_id)
+        entry = await self._store.get_action(action_id)
         if entry is None or entry.business_id != business_id:
             yield Error(team_id=None, message="I can't find that action.", recoverable=True)
             return
@@ -731,18 +816,22 @@ class FakeBrain:
             return
         delete_id = _new_id()
         summary = "Deleted the Bluesky post"
-        self._actions[delete_id] = AuditEntry(
-            action_id=delete_id,
-            business_id=business_id,
-            team_id=entry.team_id,
-            task_id=entry.task_id,
-            tool="delete_social",
-            summary=summary,
-            result=ActionResult(action_id=delete_id, ok=True),
-            autonomous=False,
-            at=now,
+        await self._store.log_action(
+            AuditEntry(
+                action_id=delete_id,
+                business_id=business_id,
+                team_id=entry.team_id,
+                task_id=entry.task_id,
+                tool="delete_social",
+                summary=summary,
+                result=ActionResult(action_id=delete_id, ok=True),
+                autonomous=False,
+                at=now,
+            )
         )
-        entry.undone_at = now
-        task = self._tasks[entry.task_id]
-        self._set_streak(self._teams[entry.team_id], task.task_type, 0)
+        await self._store.log_action(entry.model_copy(update={"undone_at": now}))
+        ctx = await self._context(business_id, entry.team_id)
+        task = await self._store.get_task(entry.task_id)
+        if ctx is not None and task is not None:
+            await self._set_streak(ctx, task.task_type, 0)
         yield ActionUndone(action_id=action_id, team_id=entry.team_id, summary=summary)

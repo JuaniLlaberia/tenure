@@ -34,7 +34,8 @@ def main() -> None:
     token = os.environ.get("TELEGRAM_BOT_TOKEN")
     if not token:
         raise SystemExit("TELEGRAM_BOT_TOKEN is not set. Add it to .env (see .env.example).")
-    application = build_application(token, FakeBrain(delay=0.8), make_store())
+    store = make_store()
+    application = build_application(token, FakeBrain(store, delay=0.8), store)
     application.run_polling(allowed_updates=Update.ALL_TYPES)
 
 if __name__ == "__main__":

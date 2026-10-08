@@ -319,13 +319,15 @@ async def test_one_failed_message_does_not_drop_the_rest(flows, chat):
 
 async def test_restart_restores_businesses_and_topics(chat, clock):
     store = InMemoryStore()
-    first = Flows(FakeBrain(clock=clock), chat, store=store, debounce=0, clock=clock)
+    first = Flows(FakeBrain(store, clock=clock), chat, store=store, debounce=0, clock=clock)
     thread_id = await marketing_team(first, chat)
 
-    restarted = Flows(FakeBrain(clock=clock), chat, store=store, debounce=0, clock=clock)
+    restarted = Flows(FakeBrain(store, clock=clock), chat, store=store, debounce=0, clock=clock)
     await restarted.load()
     await restarted.on_start(CHAT, None, is_forum=True)
     await restarted.drain()
     assert list((await store.list_businesses()).values()) == [first._state.businesses[CHAT]]
-    await say(restarted, "hello there my friend", thread_id)
-    assert chat.last(thread_id).text != ui.NOT_A_TEAM
+    assert "already set up" in chat.last(None).text
+    post, _ = await drafts(restarted, chat, thread_id)
+    await tap(restarted, post, "Approve")
+    assert chat.find("Posted to Bluesky")

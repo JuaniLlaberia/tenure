@@ -3,7 +3,8 @@ from uuid import uuid4
 
 import pytest
 
-from app.fake_brain import PROMOTION_STREAK, FakeBrain
+from app.fake_brain import PROMOTION_STREAK, TOKENS_PER_STEP, FakeBrain
+from app.store.memory import InMemoryStore
 from contract import (
     ActionDone,
     ActionUndone,
@@ -41,8 +42,12 @@ def clock() -> Clock:
     return Clock()
 
 @pytest.fixture
-def brain(clock: Clock) -> FakeBrain:
-    return FakeBrain(clock=clock)
+def store() -> InMemoryStore:
+    return InMemoryStore()
+
+@pytest.fixture
+def brain(store: InMemoryStore, clock: Clock) -> FakeBrain:
+    return FakeBrain(store, clock=clock)
 
 async def collect(events) -> list[Event]:
     return [event async for event in events]
@@ -282,7 +287,10 @@ async def test_unknown_team_yields_error(brain):
 async def test_errors_inside_a_stream_become_error_events(brain):
     team_id = await hired_team(brain)
     post, _ = await drafts(brain, team_id)
-    brain._teams.clear()
+    async def broken(team_id):
+        raise RuntimeError("database down")
+
+    brain._store.get_team = broken
     events = await collect(brain.resolve_approval(decide(post.approval_id, "approve")))
     assert [type(event) for event in events] == [Error]
 
@@ -304,3 +312,60 @@ async def test_a_scripted_session_covers_every_event_type(brain):
     seen |= set(map(type, await collect(brain.handle_message(msg("Stop using emojis", team_id)))))
     seen |= set(map(type, await collect(brain.hire_team(BIZ, "nope"))))
     assert seen == set(Event.__origin__.__args__)
+
+async def test_records_land_in_the_store(brain, store):
+    team_id = await hired_team(brain)
+    profile = await store.get_profile(BIZ)
+    assert profile.name == "Bright Coaching"
+    team = await store.get_team(team_id)
+    assert team.onboarded and team.template == "marketing"
+    facts = await store.list_lessons(BIZ, team_id)
+    assert {lesson.key for lesson in facts} == {"channels", "upcoming", "newsletter_to"}
+    assert all(lesson.kind == "fact" for lesson in facts)
+
+    post, email = await drafts(brain, team_id)
+    task = await store.get_task(post.task_id)
+    assert task.status == "waiting_approval"
+    assert task.tokens_used == TOKENS_PER_STEP
+    assert (await store.get_approval(post.approval_id)).status == "pending"
+
+    events = await approve(brain, post.approval_id)
+    done = of(events, ActionDone)[0]
+    entry = await store.get_action(done.action_id)
+    assert entry.approval_id == post.approval_id and entry.tool == "post_social"
+    assert (await store.get_task(post.task_id)).status == "done"
+    assert (await store.get_trust(team_id, "social_post")).approval_streak == 1
+    resolved = await store.recent_approvals(team_id, "social_post")
+    assert [a.approval_id for a in resolved] == [post.approval_id]
+
+    await collect(brain.undo_action(BIZ, done.action_id))
+    assert (await store.get_action(done.action_id)).undone_at == NOW
+    assert (await store.get_trust(team_id, "social_post")).approval_streak == 0
+
+async def test_lessons_are_saved_with_their_scope(brain, store):
+    team_id = await hired_team(brain)
+    await say(brain, "Stop using hashtags", team_id)
+    await say(brain, "We never offer discounts", team_id)
+    preferences = [
+        lesson for lesson in await store.list_lessons(BIZ, team_id) if lesson.kind == "preference"
+    ]
+    scopes = {lesson.text: lesson.team_id for lesson in preferences}
+    assert scopes == {"Stop using hashtags": team_id, "We never offer discounts": None}
+
+async def test_reanswering_onboarding_replaces_the_fact(brain, store, clock):
+    team_id = await hired_team(brain)
+    brain._threads[team_id].onboarding_step = 0
+    team = await store.get_team(team_id)
+    await store.save_team(team.model_copy(update={"onboarded": False}))
+    await say(brain, "Only LinkedIn", team_id)
+    channels = [
+        lesson for lesson in await store.list_lessons(BIZ, team_id) if lesson.key == "channels"
+    ]
+    assert [lesson.text for lesson in channels] == ["Channels: Only LinkedIn"]
+
+async def test_a_new_brain_on_the_same_store_carries_on(brain, store, clock):
+    team_id = await hired_team(brain)
+    post, _ = await drafts(brain, team_id)
+    restarted = FakeBrain(store, clock=clock)
+    assert of(await approve(restarted, post.approval_id), ActionDone)
+    assert len(await drafts(restarted, team_id)) == 2
