@@ -42,7 +42,7 @@ For every stage:
 | 2 | [LLM layer and `decide()`](./stage-2-llm-and-decide.md) | 0 | done |
 | 3 | [Autonomy and flows](./stage-3-autonomy-and-flows.md) | 1, 2 | done |
 | 4 | [Check](./stage-4-check.md) | 1, 2 | done |
-| 5 | [Specialist subgraph](./stage-5-specialist.md) | 1, 2 | not started |
+| 5 | [Specialist subgraph](./stage-5-specialist.md) | 1, 2 | done (tests waiting for review) |
 | 6 | [Team graph and facade (demo slice)](./stage-6-team-graph.md) | 3, 4, 5 | not started |
 | 7 | [Learning](./stage-7-learning.md) | 6 | not started |
 | 8 | [Company graph (business onboarding)](./stage-8-company-graph.md) | 6 | not started |

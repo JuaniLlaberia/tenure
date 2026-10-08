@@ -162,7 +162,7 @@ All through `TenureBrain` with `FakeLLM`, `FakeJev`, `InMemoryStore`, `FakeTools
 ## Implementation notes
 
 - `TeamState.tasks` has no reducer: nodes return the whole dict with their task replaced. Parallel tasks later need a merge reducer here and `Send` in `dispatch`.
-- The `specialist` node passes its `config` to `specialist_graph.ainvoke(..., config)` so the subgraph's `Progress` events reach the facade's stream.
+- The `specialist` node calls `run_specialist(specialist_graph, state)` (stage 5), which re-emits the subgraph's `Progress` events on the team graph's stream. Plain `ainvoke` would drop them.
 - Respect the interrupt rule: `onboard` and `clarify` do nothing before `interrupt()`.
 - A reject-with-reason that arrives while the team thread is paused on an `Ask` starts a new run on that thread and drops the pending question. Acceptable for the demo.
 

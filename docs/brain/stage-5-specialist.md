@@ -1,6 +1,6 @@
 # Stage 5: Specialist subgraph
 
-**Status:** not started
+**Status:** done; tests waiting for Juan's review
 **Depends on:** stages 1, 2
 **Spec:** [brain-engine.md](../specs/brain-engine.md) §2 (layers), §4 (specialist), §7 (prompt budget)
 
@@ -116,13 +116,20 @@ There is no action tool, and none may be added here: actions run only at GATE.
 
 - Tool results go back as OpenAI `{"role": "tool", "tool_call_id": ..., "content": ...}` messages after an assistant message carrying the `tool_calls`.
 - The specialist's system prompt: persona, the task type's description, the brief, the context, "don't invent facts or prices", and the output's fields. It never mentions actions.
-- Emitting events: `get_stream_writer()` inside nodes. When the team graph invokes this subgraph from a node, custom events propagate to the parent's stream only if the subgraph is called with the parent's config; pass `config` through (stage 6 relies on this).
+- Emitting events: `get_stream_writer()` inside nodes. A subgraph invoked from a node does **not** forward its custom events to the parent's stream (checked on LangGraph 1.2.14, with or without passing `config`). The team graph calls `run_specialist(graph, state)`, which streams the subgraph and re-emits each event through the parent's writer, then returns the final state.
 
 ## Done when
 
-- [ ] All tests above pass; earlier stages still pass
-- [ ] `ruff check` passes
+- [x] All tests above pass; earlier stages still pass
+- [x] `ruff check` passes
+- [ ] Juan has reviewed the tests
 
 ## Log
 
-_Empty._
+- Oct 8: implemented under `/goal implement stage 5`. Tests written first and run red (12 failed, 11 errors on stubs; 178 earlier tests passing), then implemented: 201 passed, `ruff check` clean.
+- LangGraph finding: subgraph custom events don't reach the parent's stream, so the stage 6 plan to "pass `config` through" was wrong. Added `run_specialist()` (re-emits through the parent's writer); `subgraphs=True` also works but wraps every chunk in a namespace tuple.
+- Tests added beyond the list above: `test_tool_defs_follow_the_names_given`, `test_web_search_without_results_says_so` (tools); `test_tool_exception_goes_back_as_text`, `test_run_specialist_re_emits_events_in_parent_stream` (specialist). `test_stops_at_max_steps` also checks that the final structured call has no unanswered tool calls.
+- When the step limit is hit while the LLM still wants tools, `finalize` drops that last assistant message: the OpenAI format rejects tool calls without tool replies.
+- A tool the specialist doesn't own counts as unknown ("Tool error: there is no tool called …"), even if it exists for another specialist.
+- `context.py` exposes its sections (`profile_section`, `lessons_section`, `examples_section`, `prior_section`, `feedback_section`); `read_memory` reuses the first two. Examples are the 3 newest approved or edited drafts (edited ones show the founder's text), read from `recent_approvals(limit=10)`.
+- Manual live run (scratch script, real DeepSeek, fake tools): the researcher made 5 tool calls over 4 steps, hit the limit, and returned valid `notes` in 5,042 tokens. The tool-call message format works on OpenRouter.
