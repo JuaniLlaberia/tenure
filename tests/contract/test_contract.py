@@ -24,6 +24,7 @@ from contract import (
     Say,
     SendEmail,
     TeamHired,
+    Trust,
 )
 
 NOW = datetime(2026, 10, 8, 12, 30, tzinfo=UTC)
@@ -137,3 +138,24 @@ def test_approval_and_audit_entry_round_trip():
         at=NOW,
     )
     assert AuditEntry.model_validate_json(entry.model_dump_json()) == entry
+
+def test_trust_promotes_after_five_by_default():
+    trust = Trust(
+        team_id="t1",
+        task_type="social_post",
+        level=AutonomyLevel.ACT_AFTER_APPROVAL,
+        updated_at=NOW,
+    )
+    assert trust.promote_after == 5
+    custom = trust.model_copy(update={"promote_after": 3})
+    assert Trust.model_validate_json(custom.model_dump_json()) == custom
+
+def test_trust_needs_at_least_one_approval_to_promote():
+    with pytest.raises(ValidationError):
+        Trust(
+            team_id="t1",
+            task_type="social_post",
+            level=AutonomyLevel.ACT_AFTER_APPROVAL,
+            promote_after=0,
+            updated_at=NOW,
+        )
