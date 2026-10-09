@@ -4,7 +4,6 @@ from typing import Literal
 from brain.templates.models import LADDER, Template
 from contract import Approval, AutonomyLevel, Trust
 
-STREAK_FOR_PROMOTION = 5
 UNDO_WINDOW = timedelta(minutes=10)
 
 Gate = Literal["approval", "act", "act_autonomous"]
@@ -37,16 +36,18 @@ def promotion_level(
     trust: Trust, recent: list[Approval], max_level: AutonomyLevel, min_confidence: float
 ) -> AutonomyLevel | None:
     """
-    The level to offer, or None. Needs a streak of 5 and the last 5 resolved approvals all
-    approved without edits at check confidence >= min_confidence, below the template's cap.
+    The level to offer, or None. Needs a streak of `trust.promote_after` (contract v0.3, set by
+    the founder) and that many latest resolved approvals all approved without edits at check
+    confidence >= min_confidence, below the template's cap.
     """
     proposed = next_level(trust.level)
     if proposed is None or is_above(proposed, max_level):
         return None
-    if trust.approval_streak < STREAK_FOR_PROMOTION:
+    needed = trust.promote_after
+    if trust.approval_streak < needed:
         return None
-    last = recent[:STREAK_FOR_PROMOTION]
-    if len(last) < STREAK_FOR_PROMOTION:
+    last = recent[:needed]
+    if len(last) < needed:
         return None
     if any(a.status != "approved" or a.check_confidence < min_confidence for a in last):
         return None

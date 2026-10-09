@@ -164,7 +164,7 @@ As in CONTRACT §9.
 
 - **Gate:** `draft_only`, `act_after_approval` → approval; `act_and_report` → act and report; `autonomous` → act, `autonomous=True`.
 - **Streak:** approve without edits → + 1; edit, reject, undo → 0; actions without approval don't change it.
-- **Promotion:** streak ≥ 5, last 5 resolved approvals all `check_confidence ≥ 0.8`, level below the template's `max_level` → `PromotionOffer` for the next level.
+- **Promotion (contract v0.3):** streak ≥ `trust.promote_after` (default 5, set by the founder on the dashboard), the last `promote_after` resolved approvals (`recent_approvals(limit=promote_after)`) all approved at `check_confidence ≥ 0.8`, level below the template's `max_level` → `PromotionOffer` for the next level. The evidence names the number ("your last 3 social post drafts").
 
 ## 7. Learning loop
 

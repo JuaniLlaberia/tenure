@@ -63,7 +63,7 @@ The `learn` and `revise` hooks are filled in at stage 7 (reflect) and stage 6 (r
 
 **Gate:** `draft_only`, `act_after_approval` → `approval`; `act_and_report` → `act`; `autonomous` → `act_autonomous`.
 
-**Promotion** (`promotion_level`): returns `next_level(trust.level)` only if `trust.approval_streak ≥ 5`, the 5 most recent resolved approvals are all `approved` with `check_confidence ≥ min_confidence`, and the next level is ≤ `max_level`.
+**Promotion** (`promotion_level`): returns `next_level(trust.level)` only if `trust.approval_streak ≥ trust.promote_after`, the `promote_after` most recent resolved approvals are all `approved` with `check_confidence ≥ min_confidence`, and the next level is ≤ `max_level`. (Was a fixed 5 until contract v0.3; see the log.)
 
 **`execute_action`:** calls `post_social` or `send_email` and always writes an `AuditEntry` (also when `ok=False`).
 
@@ -165,3 +165,4 @@ All `resolved_at` and `updated_at` come from `deps.clock()`. The lead persona co
 - `execute_action` turns an exception from a tool into a failed `ActionResult` (`error` = exception class name), so a raising tool is still audited.
 - A failed delete during undo is also written to the audit log (`summary="Failed to delete the Bluesky post"`), and the original keeps `undone_at=None`.
 - Order of events: approve → `ActionDone`, lead `Say`, optional `PromotionOffer`; edit → `ActionDone`, the `learn` hook's events, `Say`; reject with a reason → the `learn` hook's events, then the `revise` hook's events (no `Say` of its own), else `Say`.
+- Oct 8, contract v0.3 (Juan OK'd it by asking for the change): `STREAK_FOR_PROMOTION` is gone. `promotion_level` uses `trust.promote_after`; `resolve_approval` reads `recent_approvals(limit=trust.promote_after)` and names that number in the evidence. New trust rows keep the contract default (5); approve, promotion and undo keep the founder's value because they copy the row. New tests in `tests/brain/test_promote_after.py` (8, run red first: 4 failed on the fixed 5); the approved stage 3 tests are unchanged and still pass with the default. `make_team` in `conftest.py` gained a `promote_after` option.

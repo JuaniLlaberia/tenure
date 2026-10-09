@@ -78,7 +78,9 @@ def collect():
 
 @pytest.fixture
 def make_team(deps):
-    async def make(business_id="b1", template="marketing", levels=None, streaks=None) -> Team:
+    async def make(
+        business_id="b1", template="marketing", levels=None, streaks=None, promote_after=None
+    ) -> Team:
         spec = deps.templates[template]
         team = Team(
             team_id=new_id(),
@@ -96,6 +98,7 @@ def make_team(deps):
                     task_type=task_type,
                     level=(levels or {}).get(task_type, task_spec.start_level),
                     approval_streak=(streaks or {}).get(task_type, 0),
+                    promote_after=(promote_after or {}).get(task_type, 5),
                     updated_at=deps.clock(),
                 )
             )

@@ -5,12 +5,7 @@ from typing import Literal
 from brain.common import guarded
 from brain.deps import Deps
 from brain.flows.actions import execute_action
-from brain.flows.autonomy import (
-    STREAK_FOR_PROMOTION,
-    promotion_level,
-    record_approve,
-    reset_streak,
-)
+from brain.flows.autonomy import promotion_level, record_approve, reset_streak
 from brain.templates.models import Template
 from brain.templates.registries import POST_LIMIT
 from contract import (
@@ -127,7 +122,7 @@ async def _approve(deps: Deps, ctx: Context) -> AsyncIterator[Event]:
     )
 
     recent = await deps.store.recent_approvals(
-        approval.team_id, approval.task_type, STREAK_FOR_PROMOTION
+        approval.team_id, approval.task_type, trust.promote_after
     )
     proposed = promotion_level(
         trust,
@@ -143,7 +138,7 @@ async def _approve(deps: Deps, ctx: Context) -> AsyncIterator[Event]:
             current_level=trust.level,
             proposed_level=proposed,
             evidence=(
-                f"You approved my last {STREAK_FOR_PROMOTION} {label(approval.task_type)} "
+                f"You approved my last {trust.promote_after} {label(approval.task_type)} "
                 "drafts without edits."
             ),
         )
