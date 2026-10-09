@@ -51,3 +51,20 @@ async def test_reasoning_can_be_turned_off():
     await llm.complete("m", MESSAGES)
 
     assert requests[0]["reasoning"] == {"enabled": False}
+
+async def test_requests_let_openrouter_pick_the_provider_by_default():
+    requests = []
+    llm = llm_recording(Settings(openrouter_api_key="k"), requests)
+
+    await llm.complete("m", MESSAGES)
+
+    assert "provider" not in requests[0]
+
+async def test_provider_can_be_pinned():
+    requests = []
+    settings = Settings.from_env({"OPENROUTER_API_KEY": "k", "OPENROUTER_PROVIDER": "alibaba"})
+    llm = llm_recording(settings, requests)
+
+    await llm.complete("m", MESSAGES)
+
+    assert requests[0]["provider"] == {"only": ["alibaba"], "allow_fallbacks": False}

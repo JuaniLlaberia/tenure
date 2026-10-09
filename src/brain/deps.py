@@ -15,6 +15,7 @@ from contract import Store, Tools
 class Settings(BaseModel):
     openrouter_api_key: SecretStr | None = None
     openrouter_base_url: str = "https://openrouter.ai/api/v1"
+    openrouter_provider: str | None = None
     jev_url: str = "https://openrouter.ai/api/alpha/decisions"
     model_lead: str = "deepseek/deepseek-v4-flash-0731"
     model_specialist: str = "deepseek/deepseek-v4-flash-0731"
