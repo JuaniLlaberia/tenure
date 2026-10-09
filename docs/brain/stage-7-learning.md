@@ -1,6 +1,6 @@
 # Stage 7: Learning
 
-**Status:** done; tests waiting for Juan's review
+**Status:** done
 **Depends on:** stage 6
 **Spec:** [brain-engine.md](../specs/brain-engine.md) §7 (learning loop); [CONTRACT.md](../CONTRACT.md) §6 (`LessonLearned`), §11 (`Lesson`)
 
@@ -86,7 +86,7 @@ A message that is both feedback and work ("stop using hashtags, and post about F
 
 - [x] All tests above pass; earlier stages still pass
 - [x] `ruff check` passes
-- [ ] Juan has reviewed the tests
+- [x] Juan has reviewed the tests (Oct 9)
 
 ## Log
 

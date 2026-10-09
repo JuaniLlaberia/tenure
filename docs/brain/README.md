@@ -42,11 +42,11 @@ For every stage:
 | 2 | [LLM layer and `decide()`](./stage-2-llm-and-decide.md) | 0 | done |
 | 3 | [Autonomy and flows](./stage-3-autonomy-and-flows.md) | 1, 2 | done |
 | 4 | [Check](./stage-4-check.md) | 1, 2 | done |
-| 5 | [Specialist subgraph](./stage-5-specialist.md) | 1, 2 | done (tests waiting for review) |
-| 6 | [Team graph and facade (demo slice)](./stage-6-team-graph.md) | 3, 4, 5 | done (tests waiting for review) |
-| 7 | [Learning](./stage-7-learning.md) | 6 | done (tests waiting for review) |
-| 8 | [Company graph (business onboarding)](./stage-8-company-graph.md) | 6 | done (tests waiting for review) |
-| 9 | [CLI, Postgres checkpointer, end to end](./stage-9-cli-and-e2e.md) | 6–8 | done (tests waiting for review; Postgres not yet run live) |
+| 5 | [Specialist subgraph](./stage-5-specialist.md) | 1, 2 | done |
+| 6 | [Team graph and facade (demo slice)](./stage-6-team-graph.md) | 3, 4, 5 | done |
+| 7 | [Learning](./stage-7-learning.md) | 6 | done |
+| 8 | [Company graph (business onboarding)](./stage-8-company-graph.md) | 6 | done |
+| 9 | [CLI, Postgres checkpointer, end to end](./stage-9-cli-and-e2e.md) | 6–8 | done |
 
 Statuses: `not started` → `tests written` (red, waiting for review) → `tests approved` → `done`.
 
@@ -58,5 +58,5 @@ Stages 3, 4 and 5 are independent of each other once 1 and 2 are done.
 - Reasoning stays on by default (`LLM_REASONING=true`); set it to `false` for testing and the demo (Oct 9).
 - `.env.example` may be edited for the brain's env vars (`MODEL_DECIDE_FALLBACK`, default model ids).
 - Models: `deepseek/deepseek-v4-flash-0731` for every LLM role; Jev is `typesafe/jev-1.13` on OpenRouter's Decisions API (spec §9).
-- Tests are reviewed per stage, in chat. Juan approved the tests of stages 1–4 on Oct 8, reviewing them as they were written.
+- Tests are reviewed per stage, in chat. Juan approved the tests of stages 1–4 on Oct 8, reviewing them as they were written, and of stages 5–9 on Oct 9. All tests are now frozen.
 - Commits go to the `brain` branch (Juan OK'd committing on Oct 8). Push only when asked.

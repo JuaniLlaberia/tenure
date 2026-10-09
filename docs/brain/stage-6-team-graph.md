@@ -1,6 +1,6 @@
 # Stage 6: Team graph and facade (demo slice)
 
-**Status:** done; tests waiting for Juan's review
+**Status:** done
 **Depends on:** stages 3, 4, 5
 **Spec:** [brain-engine.md](../specs/brain-engine.md) §2 (layers, interrupt rule), §3.1 (team graph), §9 (`decide()`); [CONTRACT.md](../CONTRACT.md) §4 (Brain), §5 (stream lifecycle), §6 (events)
 
@@ -171,7 +171,7 @@ All through `TenureBrain` with `FakeLLM`, `FakeJev`, `InMemoryStore`, `FakeTools
 - [x] All tests above pass; earlier stages still pass
 - [x] `ruff check` passes
 - [x] Manual check: one real run against OpenRouter from a scratch script (hire → onboarding → "post about our Friday launch" → approve)
-- [ ] Juan has reviewed the tests
+- [x] Juan has reviewed the tests (Oct 9)
 
 ## Log
 

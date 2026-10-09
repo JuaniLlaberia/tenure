@@ -1,6 +1,6 @@
 # Stage 9: CLI, Postgres checkpointer, end to end
 
-**Status:** done; tests waiting for Juan's review
+**Status:** done
 **Depends on:** stages 6, 7, 8
 **Spec:** [brain-engine.md](../specs/brain-engine.md) §2; [CONTRACT.md](../CONTRACT.md) §10 (checkpoints), §12 (CLI)
 
@@ -79,8 +79,8 @@ Events print as `Maya (Marketing lead): …`, with `[approval a1b2]`, `[undo unt
 - [x] All tests above pass (live ones skipped); earlier stages still pass
 - [ ] `uv run python -m brain.cli` runs the demo by hand with real models (Juan, by hand; the CLI's commands were smoke-tested with piped input, and the same demo path passes as `test_live_demo_script`)
 - [x] `ruff check` passes
-- [ ] Juan has reviewed the tests
-- [ ] `test_postgres_with_database_url` run once against Supabase (needs `DATABASE_URL` in `.env`)
+- [x] Juan has reviewed the tests (Oct 9)
+- [x] `test_postgres_with_database_url` run once against Supabase (Oct 9, passed in 2.5 s)
 
 ## Log
 
@@ -94,3 +94,4 @@ Events print as `Maya (Marketing lead): …`, with `[approval a1b2]`, `[undo unt
   2. DeepSeek reasons by default: 63–1,257 reasoning tokens on a short post, 5–27 s a call. One call also hung for minutes (no timeout). Fix: `LLM_REASONING` (default `true`, the model's own behaviour; `false` sends `reasoning: {enabled: false}`) and `LLM_TIMEOUT` (60 s) (tests: `tests/brain/test_llm_options.py`, 4). Juan's call: keep reasoning on by default for co-worker quality, and turn it off for testing and the demo.
 - After the fixes: the same post request took 56 s with reasoning off (149 s before), and `LLM_REASONING=false uv run pytest -m live tests/brain/test_live_demo.py` passed in 42 s.
 - Different models per role need no code: `MODEL_LEAD`, `MODEL_SPECIALIST`, `MODEL_REFLECT`, `MODEL_DECIDE_FALLBACK`.
+- Oct 9: Juan reviewed the stage 5–9 tests and added `DATABASE_URL`. `test_postgres_with_database_url` passed against Supabase. A scratch check also ran the real brain on Postgres across a restart: hire (paused on the first onboarding `Ask`), close the connection, open a new brain on a new connection, answer → it resumed at the second question and finished onboarding. Graph state as JSON dicts works with the Postgres serializer.

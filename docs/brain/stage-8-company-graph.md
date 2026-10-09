@@ -1,6 +1,6 @@
 # Stage 8: Company graph (business onboarding)
 
-**Status:** done; tests waiting for Juan's review
+**Status:** done
 **Depends on:** stage 6 (facade)
 **Spec:** [brain-engine.md](../specs/brain-engine.md) §3.2 (company graph), §2 (interrupt rule); [CONTRACT.md](../CONTRACT.md) §10 (onboarding done = profile exists), §11 (`BusinessProfile`)
 
@@ -100,7 +100,7 @@ Thread `{business_id}:company`. All events have `team_id=None`.
 
 - [x] All tests above pass; earlier stages still pass
 - [x] `ruff check` passes
-- [ ] Juan has reviewed the tests
+- [x] Juan has reviewed the tests (Oct 9)
 
 ## Log
 

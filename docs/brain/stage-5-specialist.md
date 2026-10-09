@@ -1,6 +1,6 @@
 # Stage 5: Specialist subgraph
 
-**Status:** done; tests waiting for Juan's review
+**Status:** done
 **Depends on:** stages 1, 2
 **Spec:** [brain-engine.md](../specs/brain-engine.md) §2 (layers), §4 (specialist), §7 (prompt budget)
 
@@ -122,7 +122,7 @@ There is no action tool, and none may be added here: actions run only at GATE.
 
 - [x] All tests above pass; earlier stages still pass
 - [x] `ruff check` passes
-- [ ] Juan has reviewed the tests
+- [x] Juan has reviewed the tests (Oct 9)
 
 ## Log
 
