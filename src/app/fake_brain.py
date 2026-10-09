@@ -691,7 +691,7 @@ class FakeBrain:
         if decision.decision == "approve":
             events = self._approve(ctx, task, approval)
         elif decision.decision == "edit":
-            events = self._edit(ctx, task, approval, decision.edited_text)
+            events = self._edit(ctx, task, approval, decision)
         else:
             events = self._reject(ctx, task, approval, decision.reason)
         async for event in events:
@@ -747,14 +747,20 @@ class FakeBrain:
         )
 
     async def _edit(
-        self, ctx: _Ctx, task: Task, approval: Approval, edited_text: str | None
+        self, ctx: _Ctx, task: Task, approval: Approval, decision: ApprovalDecision
     ) -> AsyncIterator[Event]:
+        edited_text = decision.edited_text
+        edited_action = decision.edited_action
+        action = approval.planned_action
+        if edited_action is not None and (action is None or edited_action.tool != action.tool):
+            message = "That edit doesn't match the draft."
+            yield Error(team_id=task.team_id, message=message, recoverable=True)
+            return
         if not edited_text or not edited_text.strip():
             yield Error(
                 team_id=task.team_id, message="Send me the edited version first.", recoverable=True
             )
             return
-        action = approval.planned_action
         if isinstance(action, PostSocial) and len(edited_text) > POST_LIMIT:
             yield Error(
                 team_id=task.team_id,
@@ -763,7 +769,9 @@ class FakeBrain:
             )
             return
         await self._resolve(approval, "edited", edited_text=edited_text)
-        if isinstance(action, PostSocial):
+        if edited_action is not None:
+            yield await self._execute(task, edited_action, approval.approval_id)
+        elif isinstance(action, PostSocial):
             yield await self._execute(task, PostSocial(text=edited_text), approval.approval_id)
         elif isinstance(action, SendEmail):
             edited = action.model_copy(update={"body": edited_text})

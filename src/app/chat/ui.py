@@ -89,6 +89,7 @@ REJECTING = "✕ Rejecting: send your reason below, or /cancel"
 REJECTED = "✕ Rejected"
 APPROVED_ON_DASHBOARD = "✓ Approved on the dashboard"
 REJECTED_ON_DASHBOARD = "✕ Rejected on the dashboard"
+EDITED_ON_DASHBOARD = "✎ Edited on the dashboard"
 
 def text(value: str) -> str:
     return escape(value, quote=False)

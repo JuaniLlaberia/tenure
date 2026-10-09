@@ -309,3 +309,106 @@ async def test_dashboard_refuses_a_second_team_of_the_same_kind(client, flows, c
     response = await client.post(f"/b/{token}/api/hire", json={"template": "marketing"})
     assert response.status_code == 409
     assert "already have a Marketing team" in response.json()["message"]
+
+async def post_draft(client, token: str, kind: str = "Bluesky post") -> dict:
+    return next(d for d in (await overview(client, token))["drafts"] if d["type"] == kind)
+
+async def test_drafts_carry_review_context(client, flows, chat, store):
+    token, thread_id = await setup(flows, chat, client)
+    await say(flows, "Stop using hashtags", thread_id)
+    await say(flows, REQUEST, thread_id)
+    post = await post_draft(client, token)
+    assert post["kind"] == "post" and post["text"].startswith("Big news:")
+    assert post["asked"] == REQUEST
+    assert post["steps"] == ["Leo (writer)"]
+    assert post["lead"] == "Maya" and post["streak"] == 0 and post["promote_after"] == 5
+    assert "Stop using hashtags" in post["rules"]
+    email = await post_draft(client, token, "Newsletter")
+    assert email["kind"] == "email" and email["to"] == "list@example.com"
+    assert email["steps"] == ["Sam (researcher)", "Leo (writer)"]
+
+    await client.post(
+        f"/b/{token}/api/approvals/{post['approval_id']}/reject", json={"reason": "Too salesy"}
+    )
+    await flows.drain()
+    revised = await post_draft(client, token)
+    assert revised["revision"] == 1 and revised["revised_after"] == "Too salesy"
+
+async def test_editing_a_post_from_the_dashboard(client, flows, chat, store):
+    token, thread_id = await setup(flows, chat, client)
+    await say(flows, REQUEST, thread_id)
+    post = await post_draft(client, token)
+    url = f"/b/{token}/api/approvals/{post['approval_id']}/approve"
+    too_long = await client.post(url, json={"text": "x" * 301})
+    assert too_long.status_code == 409 and "301 characters" in too_long.json()["message"]
+
+    response = await client.post(url, json={"text": "Launching Friday. Come along."})
+    assert "learn" in response.json()["message"]
+    await flows.drain()
+    card = chat.find("Draft for approval: <b>Bluesky post")
+    assert card.text.endswith(f"<i>{ui.EDITED_ON_DASHBOARD}</i>")
+    approval = await store.get_approval(post["approval_id"])
+    assert approval.status == "edited" and approval.edited_text == "Launching Friday. Come along."
+    assert chat.find("Learned:")
+
+async def test_unchanged_text_is_a_plain_approval(client, flows, chat, store):
+    token, thread_id = await setup(flows, chat, client)
+    await say(flows, REQUEST, thread_id)
+    post = await post_draft(client, token)
+    url = f"/b/{token}/api/approvals/{post['approval_id']}/approve"
+    await client.post(url, json={"text": post["text"]})
+    await flows.drain()
+    assert (await store.get_approval(post["approval_id"])).status == "approved"
+
+async def test_editing_an_email_subject_and_recipient(client, flows, chat, store):
+    token, thread_id = await setup(flows, chat, client)
+    await say(flows, REQUEST, thread_id)
+    email = await post_draft(client, token, "Newsletter")
+    url = f"/b/{token}/api/approvals/{email['approval_id']}/approve"
+    bad = await client.post(url, json={"to": "not an address"})
+    assert bad.status_code == 409
+
+    await client.post(url, json={"to": "team@bright.example", "subject": "Friday!"})
+    await flows.drain()
+    assert chat.find("Sent the email to team@bright.example")
+    approval = await store.get_approval(email["approval_id"])
+    assert approval.status == "edited"
+
+async def test_dashboard_decision_cancels_a_telegram_edit_prompt(client, flows, chat, store):
+    token, thread_id = await setup(flows, chat, client)
+    await say(flows, REQUEST, thread_id)
+    card = chat.find("Draft for approval: <b>Bluesky post")
+    await flows.on_callback(CHAT, card.message_id, card.data("Edit"))
+    post = await post_draft(client, token)
+    await client.post(f"/b/{token}/api/approvals/{post['approval_id']}/approve")
+    await flows.drain()
+    assert (CHAT, thread_id) not in flows._state.pending
+    await say(flows, "We launch our new package on Friday morning, tell people", thread_id)
+    assert "waiting for your OK" in chat.last(thread_id).text
+
+async def test_undo_from_the_dashboard(client, flows, chat, store, clock):
+    token, thread_id = await setup(flows, chat, client)
+    await say(flows, REQUEST, thread_id)
+    post = await post_draft(client, token)
+    await client.post(f"/b/{token}/api/approvals/{post['approval_id']}/approve")
+    await flows.drain()
+    (action,) = (await overview(client, token))["activity"]
+    assert action["undo_until"] is not None
+
+    response = await client.post(f"/b/{token}/api/actions/{action['action_id']}/undo")
+    assert response.status_code == 200
+    await flows.drain()
+    assert chat.find("Deleted the Bluesky post").text.startswith("<s>Posted to Bluesky</s>")
+    again = await client.post(f"/b/{token}/api/actions/{action['action_id']}/undo")
+    assert again.status_code == 409
+
+async def test_undo_after_the_window_is_refused(client, flows, chat, store, clock):
+    token, thread_id = await setup(flows, chat, client)
+    await say(flows, REQUEST, thread_id)
+    post = await post_draft(client, token)
+    await client.post(f"/b/{token}/api/approvals/{post['approval_id']}/approve")
+    await flows.drain()
+    action_id = (await store.list_actions((await store.list_businesses())[CHAT]))[0].action_id
+    clock.now = NOW + timedelta(minutes=11)
+    response = await client.post(f"/b/{token}/api/actions/{action_id}/undo")
+    assert response.status_code == 409 and "window" in response.json()["message"]

@@ -1,4 +1,5 @@
-from typing import TypeVar
+from datetime import UTC, datetime
+from typing import Any, TypeVar
 from uuid import uuid4
 
 from pydantic import BaseModel
@@ -37,6 +38,7 @@ class InMemoryStore:
         self._lessons: dict[str, Lesson] = {}
         self._actions: dict[str, AuditEntry] = {}
         self._dashboards: dict[str, tuple[str | None, str | None]] = {}
+        self._state: dict[tuple[str, str], tuple[Any, datetime]] = {}
 
     async def create_business(self, chat_id: int) -> str:
         business_id = str(uuid4())
@@ -99,6 +101,19 @@ class InMemoryStore:
         ]
         lessons.sort(key=lambda lesson: lesson.created_at, reverse=True)
         return [_copy(lesson) for lesson in lessons]
+
+    async def save_state(self, kind: str, key: str, data: Any) -> None:
+        self._state[(kind, key)] = (data, datetime.now(UTC))
+
+    async def delete_state(self, kind: str, key: str) -> None:
+        self._state.pop((kind, key), None)
+
+    async def list_state(self) -> list[tuple[str, str, Any]]:
+        return [(kind, key, data) for (kind, key), (data, _) in self._state.items()]
+
+    async def prune_state(self, before: datetime) -> None:
+        for item in [k for k, (_, at) in self._state.items() if at < before]:
+            del self._state[item]
 
     async def delete_team(self, team_id: str) -> None:
         self._teams.pop(team_id, None)

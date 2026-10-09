@@ -1,3 +1,4 @@
+import asyncio
 from datetime import timedelta
 
 import pytest
@@ -307,3 +308,71 @@ async def test_quick_double_hire_only_hires_once(chat, clock):
     assert len(chat.topics) == 1
     business_id = (await store.list_businesses())[CHAT]
     assert len(await store.list_teams(business_id)) == 1
+
+async def restart(store, chat, clock, **options) -> Flows:
+    brain = FakeBrain(store, clock=clock)
+    flows = Flows(brain, chat, store=store, debounce=0, clock=clock, **options)
+    await flows.load()
+    return flows
+
+async def test_buttons_keep_working_after_a_restart(chat, clock):
+    store = InMemoryStore()
+    first = Flows(FakeBrain(store, clock=clock), chat, store=store, debounce=0, clock=clock)
+    thread_id = await marketing_team(first, chat)
+    post, email = await drafts(first, chat, thread_id)
+    await tap(first, post, "Approve")
+    await first.drain()
+
+    flows = await restart(store, chat, clock)
+    assert await flows.on_callback(CHAT, post.message_id, f"{ui.APPROVE}:x") == ui.ALREADY_HANDLED
+    await tap(flows, email, "Approve")
+    assert email.text.endswith(f"<i>{ui.APPROVED}</i>")
+    assert chat.find("Sent the email")
+    done = chat.find("Posted to Bluesky")
+    await tap(flows, done, "Undo")
+    assert done.text.startswith("<s>Posted to Bluesky</s>")
+
+async def test_a_pending_edit_survives_a_restart(chat, clock):
+    store = InMemoryStore()
+    first = Flows(FakeBrain(store, clock=clock), chat, store=store, debounce=0, clock=clock)
+    thread_id = await marketing_team(first, chat)
+    post, _ = await drafts(first, chat, thread_id)
+    await tap(first, post, "Edit")
+    await first.drain()
+
+    flows = await restart(store, chat, clock)
+    await say(flows, "Launching Friday, come along.", thread_id)
+    assert post.text.endswith(f"<i>{ui.EDITED}</i>")
+    assert chat.find("Posted to Bluesky")
+
+async def test_handled_cards_stay_handled_after_a_restart(chat, clock):
+    store = InMemoryStore()
+    first = Flows(FakeBrain(store, clock=clock), chat, store=store, debounce=0, clock=clock)
+    await setup_business(first)
+    card = chat.find("Setup done")
+    data = card.data("Marketing")
+    await tap(first, card, "Marketing")
+    await first.drain()
+
+    flows = await restart(store, chat, clock)
+    assert await flows.on_callback(CHAT, card.message_id, data) == ui.ALREADY_HANDLED
+
+async def test_restart_cleans_up_status_lines_and_password_messages(chat, clock):
+    store = InMemoryStore()
+    first = Flows(
+        FakeBrain(store, clock=clock), chat, store=store, debounce=0, clock=clock,
+        password_ttl=600,
+    )
+    await setup_business(first)
+    await first.on_dashboard(CHAT, None)
+    password = chat.last(None)
+    first._state.status[(CHAT, None)] = password.message_id - 1
+    await first.drain()
+    for timer in list(first._timers):
+        timer.cancel()
+
+    clock.now = NOW + timedelta(minutes=11)
+    await restart(store, chat, clock)
+    await asyncio.sleep(0.01)
+    assert password.message_id - 1 in chat.deleted
+    assert password.message_id in chat.deleted

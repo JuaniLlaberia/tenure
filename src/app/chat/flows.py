@@ -7,9 +7,9 @@ import logging
 from collections import defaultdict
 from collections.abc import AsyncIterator, Callable, Coroutine
 from dataclasses import dataclass, field
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from functools import partial
-from typing import Any
+from typing import Any, Literal
 from uuid import uuid4
 
 from app.chat import ui
@@ -22,6 +22,7 @@ from app.chat.state import (
     Card,
     LessonCard,
     OfferCard,
+    PasswordMessage,
     Pending,
     ReplaceCard,
 )
@@ -40,6 +41,7 @@ from contract import (
     LessonLearned,
     NeedsApproval,
     OnboardingComplete,
+    PlannedAction,
     PostSocial,
     Progress,
     PromotionOffer,
@@ -51,6 +53,13 @@ from contract import (
 )
 
 logger = logging.getLogger(__name__)
+
+STATE_KEPT = timedelta(days=14)
+DASHBOARD_FOOTERS = {
+    "approve": ui.APPROVED_ON_DASHBOARD,
+    "edit": ui.EDITED_ON_DASHBOARD,
+    "reject": ui.REJECTED_ON_DASHBOARD,
+}
 
 Events = Callable[[], AsyncIterator[Event]]
 Tap = Callable[[int, int, str], Coroutine[Any, Any, str | None]]
@@ -96,11 +105,11 @@ class Flows:
         self._deciding: set[str] = set()
         self._hiring: set[tuple[str, str]] = set()
         self._password_ttl = password_ttl
-        self._password_messages: dict[int, int] = {}
         self._timers: set[asyncio.Task] = set()
         self._chat = chat
         self._state = state or AppState()
         self._store = store or InMemoryStore()
+        self._state.journal.store = self._store
         self._debounce = debounce
         self._typing_every = typing_every
         self._clock = clock
@@ -129,14 +138,26 @@ class Flows:
         """
         while self._tasks:
             await asyncio.gather(*list(self._tasks), return_exceptions=True)
+        await self._state.journal.flush()
 
     async def load(self) -> None:
         """
-        Restores businesses and team topics from the store, so a restart keeps working.
+        Restores what the bot knows after a restart: groups, team topics, the cards it can
+        still edit, pending prompts and password messages. Leftover status lines are deleted.
         """
         self._state.businesses.update(await self._store.list_businesses())
         for topic in await self._store.list_topics():
             self._state.add_team(topic.chat_id, topic.thread_id, topic.team_id, topic.name)
+        await self._store.prune_state(self._clock() - STATE_KEPT)
+        self._state.restore(await self._store.list_state())
+        for (chat_id, _), message_id in list(self._state.status.items()):
+            try:
+                await self._chat.delete(chat_id, message_id)
+            except Exception:
+                logger.debug("Deleting a leftover status message failed", exc_info=True)
+        self._state.status.clear_all()
+        for chat_id, message in list(self._state.passwords.items()):
+            self._schedule_password_deletion(chat_id, message)
 
     async def on_start(self, chat_id: int, thread_id: int | None, is_forum: bool) -> None:
         if not is_forum:
@@ -198,8 +219,16 @@ class Flows:
                 ui.dashboard_text(password, minutes, url=url),
                 ui.dashboard_keyboard(password),
             )
-        self._password_messages[chat_id] = message_id
-        timer = asyncio.create_task(self._expire_password_message(chat_id, message_id))
+        message = PasswordMessage(
+            message_id=message_id,
+            delete_at=self._clock() + timedelta(seconds=self._password_ttl),
+        )
+        self._state.passwords[chat_id] = message
+        self._schedule_password_deletion(chat_id, message)
+
+    def _schedule_password_deletion(self, chat_id: int, message: PasswordMessage) -> None:
+        delay = max(0.0, (message.delete_at - self._clock()).total_seconds())
+        timer = asyncio.create_task(self._expire_password_message(chat_id, message, delay))
         self._timers.add(timer)
         timer.add_done_callback(self._timers.discard)
 
@@ -211,17 +240,19 @@ class Flows:
         await self._delete_password_message(chat_id)
         await self._chat.send(chat_id, thread_id, ui.DASHBOARD_STOPPED)
 
-    async def _expire_password_message(self, chat_id: int, message_id: int) -> None:
-        await asyncio.sleep(self._password_ttl)
-        if self._password_messages.get(chat_id) == message_id:
+    async def _expire_password_message(
+        self, chat_id: int, message: PasswordMessage, delay: float
+    ) -> None:
+        await asyncio.sleep(delay)
+        if self._state.passwords.get(chat_id) == message:
             await self._delete_password_message(chat_id)
 
     async def _delete_password_message(self, chat_id: int) -> None:
-        message_id = self._password_messages.pop(chat_id, None)
-        if message_id is None:
+        message = self._state.passwords.pop(chat_id, None)
+        if message is None:
             return
         try:
-            await self._chat.delete(chat_id, message_id)
+            await self._chat.delete(chat_id, message.message_id)
         except Exception:
             logger.debug("Deleting the password message failed", exc_info=True)
 
@@ -319,30 +350,58 @@ class Flows:
         )
 
     async def decide_from_dashboard(
-        self, business_id: str, approval_id: str, approve: bool, reason: str | None = None
+        self,
+        business_id: str,
+        approval_id: str,
+        decision: Literal["approve", "edit", "reject"],
+        reason: str | None = None,
+        edited_text: str | None = None,
+        edited_action: PlannedAction | None = None,
     ) -> None:
         """
-        Approve or reject a draft from the dashboard, as if tapped in Telegram.
+        Approve, edit or reject a draft from the dashboard, as if done in Telegram.
         """
         approval = await self._store.get_approval(approval_id)
         if approval is None or approval.business_id != business_id:
             raise Refused("I can't find that draft.")
         card = self._state.approvals.get(approval_id)
-        busy = card is not None and (card.chat_id, card.message_id) in self._state.handled
+        prompts = [w for w, p in self._state.pending.items() if p.approval_id == approval_id]
+        handled = card is not None and (card.chat_id, card.message_id) in self._state.handled
+        busy = handled and not prompts
         if approval.status != "pending" or busy or approval_id in self._deciding:
             raise Refused("That draft is already being handled.")
         chat_id = self._chat_for(business_id)
         self._deciding.add(approval_id)
+        for where in prompts:
+            del self._state.pending[where]
         if card is not None:
-            footer = ui.APPROVED_ON_DASHBOARD if approve else ui.REJECTED_ON_DASHBOARD
-            await self._close(card, footer)
-        decision = ApprovalDecision(
+            await self._close(card, DASHBOARD_FOOTERS[decision])
+        resolution = ApprovalDecision(
             business_id=business_id,
             approval_id=approval_id,
-            decision="approve" if approve else "reject",
+            decision=decision,
             reason=reason.strip() if reason and reason.strip() else None,
+            edited_text=edited_text,
+            edited_action=edited_action,
         )
-        self._track(self._decide_and_release(chat_id, approval.team_id, decision))
+        self._track(self._decide_and_release(chat_id, approval.team_id, resolution))
+
+    async def undo_from_dashboard(self, business_id: str, action_id: str) -> None:
+        entry = await self._store.get_action(action_id)
+        if entry is None or entry.business_id != business_id:
+            raise Refused("I can't find that action.")
+        if entry.undone_at is not None:
+            raise Refused("That was already undone.")
+        if entry.undo_until is None or self._clock() > entry.undo_until:
+            raise Refused(ui.UNDO_CLOSED)
+        chat_id = self._chat_for(business_id)
+        card = self._state.actions.get(action_id)
+        if card is not None:
+            if (card.chat_id, card.message_id) in self._state.handled:
+                raise Refused("That's already being undone.")
+            await self._close(card, None)
+        undo = partial(self._brain.undo_action, business_id, action_id)
+        self._spawn(chat_id, entry.team_id, self._thread_for(entry.team_id), undo)
 
     async def _decide_and_release(
         self, chat_id: int, team_id: str, decision: ApprovalDecision

@@ -7,7 +7,19 @@ from typing import Any
 
 from app.chat import ui
 from app.store.base import AppStore
-from contract import Approval, AuditEntry, AutonomyLevel, Brain, Lesson, Task, Team, TemplateInfo
+from contract import (
+    Approval,
+    AuditEntry,
+    AutonomyLevel,
+    Brain,
+    Lesson,
+    Persona,
+    PostSocial,
+    SendEmail,
+    Task,
+    Team,
+    TemplateInfo,
+)
 
 WEEK = timedelta(days=7)
 PROMOTE_AFTER_MAX = 20
@@ -37,6 +49,7 @@ async def build_overview(
     templates = {t.name: t for t in brain.list_templates()}
     teams = await store.list_teams(business_id)
     team_names = {team.team_id: team.display_name for team in teams}
+    team_by_id = {team.team_id: team for team in teams}
     tasks = await store.list_tasks(business_id)
     approvals = await store.list_approvals(business_id)
     actions = await store.list_actions(business_id)
@@ -49,13 +62,16 @@ async def build_overview(
         "lead": leads[0] if len(leads) == 1 else None,
         "stats": _stats(tasks, approvals, actions, now),
         "teams": [await _team(store, team, templates.get(team.template)) for team in teams],
-        "drafts": [_draft(a, titles, team_names) for a in pending],
+        "drafts": [
+            await _draft(store, a, approvals, team_by_id, templates) for a in pending
+        ],
         "tasks": [_task(task, team_names) for task in tasks],
         "lessons": [_lesson(lesson, team_names) for lesson in lessons],
         "activity": [_action(a, titles, now) for a in actions if a.tool != "delete_social"],
         "templates": [_template(t, teams) for t in templates.values()],
         "levels": LEVEL_NAMES,
         "promote_after_max": PROMOTE_AFTER_MAX,
+        "now": now,
     }
 
 def _stats(
@@ -98,17 +114,52 @@ async def _team(store: AppStore, team: Team, template: TemplateInfo | None) -> d
         ],
     }
 
-def _draft(approval: Approval, titles: dict[str, str], teams: dict[str, str]) -> dict[str, Any]:
+async def _draft(
+    store: AppStore,
+    approval: Approval,
+    approvals: list[Approval],
+    teams: dict[str, Team],
+    templates: dict[str, TemplateInfo],
+) -> dict[str, Any]:
+    team = teams.get(approval.team_id)
+    template = templates.get(team.template) if team else None
+    personas = template.personas if template else []
+    task = await store.get_task(approval.task_id)
+    trust = await store.get_trust(approval.team_id, approval.task_type)
+    rules = await store.list_lessons(approval.business_id, approval.team_id, approval.task_type)
+    rejected = [
+        a for a in approvals
+        if a.task_id == approval.task_id and a.status == "rejected" and a.reason
+    ]
+    action = approval.planned_action
     return {
         "approval_id": approval.approval_id,
-        "team": teams.get(approval.team_id, ""),
+        "team_id": approval.team_id,
+        "team": team.display_name if team else "",
+        "lead": personas[0].name if personas else "The team",
         "type": ui.task_title(approval.task_type),
-        "title": titles.get(approval.task_id, ui.task_title(approval.task_type)),
+        "kind": "post" if isinstance(action, PostSocial) else "email" if action else "draft",
+        "title": task.title if task else ui.task_title(approval.task_type),
+        "asked": task.brief if task else None,
+        "steps": [_step(step, personas) for step in (task.steps if task else [])],
+        "revision": task.revisions if task else 0,
+        "revised_after": rejected[0].reason if rejected else None,
         "preview": approval.preview,
-        "meta": ui.approval_meta(approval.planned_action),
+        "text": action.text if isinstance(action, PostSocial) else action.body if action else None,
+        "to": action.to if isinstance(action, SendEmail) else None,
+        "subject": action.subject if isinstance(action, SendEmail) else None,
         "check": round(approval.check_confidence * 100),
+        "rules": [lesson.text for lesson in rules],
+        "streak": trust.approval_streak if trust else 0,
+        "promote_after": trust.promote_after if trust else 5,
         "created_at": approval.created_at,
     }
+
+def _step(step: str, personas: list[Persona]) -> str:
+    for persona in personas[1:]:
+        if step.lower() in persona.role.lower():
+            return f"{persona.name} ({persona.role.lower()})"
+    return step.replace("_", " ").capitalize()
 
 def _task(task: Task, teams: dict[str, str]) -> dict[str, Any]:
     return {

@@ -117,6 +117,14 @@ create table if not exists audit_log (
 );
 create index if not exists audit_log_business on audit_log (business_id, at desc);
 
+create table if not exists telegram_state (
+    kind text not null,
+    key text not null,
+    data jsonb not null,
+    updated_at timestamptz not null default now(),
+    primary key (kind, key)
+);
+
 alter table businesses enable row level security;
 alter table telegram_topics enable row level security;
 alter table business_profiles enable row level security;
@@ -126,3 +134,4 @@ alter table tasks enable row level security;
 alter table approvals enable row level security;
 alter table lessons enable row level security;
 alter table audit_log enable row level security;
+alter table telegram_state enable row level security;

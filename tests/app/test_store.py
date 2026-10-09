@@ -351,3 +351,16 @@ async def test_delete_team_removes_its_records_but_keeps_the_audit_log(store):
     assert [x.lesson_id for x in await store.list_all_lessons(business_id)] == [shared.lesson_id]
     assert await store.get_action(action_id) is not None
     assert await store.get_team(other_team) is not None
+
+async def test_state_items_round_trip_and_prune(store):
+    kind = f"test-{new_id()}"
+    await store.save_state(kind, '["1", 2]', {"a": [1, 2], "b": None})
+    await store.save_state(kind, "k2", {})
+    await store.save_state(kind, "k2", {"x": 1})
+    mine = sorted((k, d) for kd, k, d in await store.list_state() if kd == kind)
+    assert mine == [('["1", 2]', {"a": [1, 2], "b": None}), ("k2", {"x": 1})]
+    await store.delete_state(kind, "k2")
+    await store.prune_state(datetime.now(UTC) - timedelta(days=1))
+    assert [k for kd, k, _ in await store.list_state() if kd == kind] == ['["1", 2]']
+    await store.prune_state(datetime.now(UTC) + timedelta(seconds=5))
+    assert [k for kd, k, _ in await store.list_state() if kd == kind] == []

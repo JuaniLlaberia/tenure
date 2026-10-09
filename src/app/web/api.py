@@ -6,6 +6,7 @@ Everything under /b/<token>/api except login needs the session cookie for that l
 
 import asyncio
 import hmac
+import re
 from collections.abc import Callable
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
@@ -19,12 +20,14 @@ from app.chat.flows import Flows, Refused
 from app.store.base import AppStore
 from app.web import auth
 from app.web.overview import PROMOTE_AFTER_MAX, build_overview
-from contract import AutonomyLevel, Brain
+from contract import AutonomyLevel, Brain, PlannedAction, PostSocial, SendEmail
 
 PAGE = Path(__file__).with_name("dashboard.html")
 COOKIE = "tenure_session"
 LEVELS = list(AutonomyLevel)
 GONE = "This dashboard link isn't valid or was turned off. Send /dashboard for a new one."
+EMAIL = re.compile(r"[^@\s]+@[^@\s]+\.[^@\s]+")
+POST_LIMIT = 300
 LOCKED = "Too many wrong tries. Wait 5 minutes, or send /dashboard for a new password."
 
 class Login(BaseModel):
@@ -32,6 +35,11 @@ class Login(BaseModel):
 
 class Hire(BaseModel):
     template: str
+
+class Approve(BaseModel):
+    text: str | None = None
+    subject: str | None = None
+    to: str | None = None
 
 class Reject(BaseModel):
     reason: str | None = None
@@ -43,6 +51,34 @@ class Lower(BaseModel):
 class Threshold(BaseModel):
     team_id: str
     promote_after: int = Field(ge=1, le=PROMOTE_AFTER_MAX)
+
+def _edited(planned: PlannedAction | None, body: Approve) -> PlannedAction | None:
+    """
+    The founder's version of the action, or None if nothing changed.
+    """
+    if isinstance(planned, PostSocial):
+        text = planned.text if body.text is None else body.text
+        if text == planned.text:
+            return None
+        if not text.strip():
+            raise Refused("The post can't be empty.")
+        if len(text) > POST_LIMIT:
+            raise Refused(f"That's {len(text)} characters; Bluesky allows {POST_LIMIT}.")
+        return PostSocial(text=text)
+    if isinstance(planned, SendEmail):
+        version = SendEmail(
+            to=(planned.to if body.to is None else body.to).strip(),
+            subject=(planned.subject if body.subject is None else body.subject).strip(),
+            body=planned.body if body.text is None else body.text,
+        )
+        if version == planned:
+            return None
+        if not EMAIL.fullmatch(version.to):
+            raise Refused("That email address doesn't look right.")
+        if not version.subject or not version.body.strip():
+            raise Refused("The email needs a subject and a body.")
+        return version
+    return None
 
 def _utcnow() -> datetime:
     return datetime.now(UTC)
@@ -132,20 +168,43 @@ def create_api(
         return {"message": "Hiring now. The team's topic will appear in Telegram."}
 
     @api.post("/b/{token}/api/approvals/{approval_id}/approve")
-    async def approve(token: str, approval_id: str, request: Request) -> dict[str, str]:
+    async def approve(
+        token: str, approval_id: str, request: Request, body: Approve | None = None
+    ) -> dict[str, str]:
         business_id = await business(request, token)
-        await flows.decide_from_dashboard(business_id, approval_id, approve=True)
-        return {"message": "Approved. The result shows up in Telegram."}
+        approval = await store.get_approval(approval_id)
+        if approval is None or approval.business_id != business_id:
+            raise Refused("I can't find that draft.")
+        version = _edited(approval.planned_action, body or Approve())
+        if version is None:
+            await flows.decide_from_dashboard(business_id, approval_id, "approve")
+            return {"message": "Approved. The result shows up in Telegram too."}
+        text = version.text if isinstance(version, PostSocial) else version.body
+        whole = isinstance(version, SendEmail) and (
+            version.to != approval.planned_action.to
+            or version.subject != approval.planned_action.subject
+        )
+        await flows.decide_from_dashboard(
+            business_id,
+            approval_id,
+            "edit",
+            edited_text=text,
+            edited_action=version if whole else None,
+        )
+        return {"message": "Your version is going out. The team will learn from your changes."}
 
     @api.post("/b/{token}/api/approvals/{approval_id}/reject")
     async def reject(token: str, approval_id: str, body: Reject, request: Request) -> dict:
         business_id = await business(request, token)
-        await flows.decide_from_dashboard(
-            business_id, approval_id, approve=False, reason=body.reason
-        )
+        await flows.decide_from_dashboard(business_id, approval_id, "reject", reason=body.reason)
         if body.reason and body.reason.strip():
             return {"message": "Rejected. The team will revise it and learn from your reason."}
         return {"message": "Rejected and dropped."}
+
+    @api.post("/b/{token}/api/actions/{action_id}/undo")
+    async def undo(token: str, action_id: str, request: Request) -> dict[str, str]:
+        await flows.undo_from_dashboard(await business(request, token), action_id)
+        return {"message": "Undoing. The post will be deleted from Bluesky."}
 
     @api.post("/b/{token}/api/trust/lower")
     async def lower(token: str, body: Lower, request: Request) -> dict[str, str]:

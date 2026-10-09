@@ -1,3 +1,4 @@
+from datetime import UTC, datetime
 from typing import Any, TypeVar
 from uuid import uuid4
 
@@ -150,6 +151,23 @@ class SupabaseStore:
             .order("created_at", desc=True)
         )
         return [Lesson.model_validate(row) for row in (await query.execute()).data]
+
+    async def save_state(self, kind: str, key: str, data: Any) -> None:
+        row = {"kind": kind, "key": key, "data": data, "updated_at": datetime.now(UTC).isoformat()}
+        await self._upsert("telegram_state", row, on_conflict="kind,key")
+
+    async def delete_state(self, kind: str, key: str) -> None:
+        db = await self._db()
+        await db.table("telegram_state").delete().eq("kind", kind).eq("key", key).execute()
+
+    async def list_state(self) -> list[tuple[str, str, Any]]:
+        db = await self._db()
+        rows = (await db.table("telegram_state").select("kind, key, data").execute()).data
+        return [(row["kind"], row["key"], row["data"]) for row in rows]
+
+    async def prune_state(self, before: datetime) -> None:
+        db = await self._db()
+        await db.table("telegram_state").delete().lt("updated_at", before.isoformat()).execute()
 
     async def delete_team(self, team_id: str) -> None:
         db = await self._db()
