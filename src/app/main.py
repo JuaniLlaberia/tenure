@@ -14,6 +14,8 @@ from telegram import Update
 
 from app.chat.bot import build_application
 from app.fake_brain import FakeBrain
+from app.files import Files
+from app.scheduler import Scheduler
 from app.store.base import AppStore
 from app.store.memory import InMemoryStore
 from app.store.supabase_store import SupabaseStore
@@ -29,6 +31,12 @@ logger = logging.getLogger(__name__)
 COMMANDS = [
     ("start", "Set up your business"),
     ("hire", "Hire a team, e.g. /hire marketing"),
+    ("drafts", "Everything waiting for your OK"),
+    ("team", "Trust per task; lower it or change when the team asks for more"),
+    ("schedules", "Repeating work: run, stop or turn back on"),
+    ("knowledge", "What the team knows about you, with Forget"),
+    ("activity", "What went out, with Undo, and this week's tasks"),
+    ("spend", "What the models cost this week"),
     ("dashboard", "Get the dashboard link and a new password"),
     ("dashboard_stop", "Turn the dashboard off"),
     ("cancel", "Stop an edit or a reason you started"),
@@ -63,7 +71,7 @@ async def open_brain(store: AppStore, tools: Tools) -> AsyncIterator[Brain]:
 
 async def run(token: str) -> None:
     store = make_store()
-    tools = RealTools.from_env()
+    tools = RealTools.from_env(files=Files(store))
     async with open_brain(store, tools) as brain:
         await serve(token, brain, store, tools)
 
@@ -81,9 +89,11 @@ async def serve(token: str, brain: Brain, store: AppStore, tools: RealTools) -> 
         await application.bot.set_my_commands(COMMANDS)
         await application.updater.start_polling(allowed_updates=Update.ALL_TYPES)
         logger.info("Bot polling; dashboard on %s", dashboard_url)
+        schedules = asyncio.create_task(Scheduler(store, flows).run_forever())
         try:
             await server.serve()
         finally:
+            schedules.cancel()
             await application.updater.stop()
             await application.stop()
             await flows.drain()

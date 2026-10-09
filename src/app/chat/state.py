@@ -15,7 +15,7 @@ from typing import TYPE_CHECKING, Any, Literal
 from pydantic import TypeAdapter
 
 from app.chat.port import Keyboard
-from contract import AutonomyLevel, Persona, PlannedAction
+from contract import AutonomyLevel, Persona, PlannedAction, Schedule
 
 if TYPE_CHECKING:
     from app.store.base import AppStore
@@ -74,9 +74,28 @@ class ReplaceCard(Card):
     name: str
 
 @dataclass
+class ScheduleCard(Card):
+    business_id: str
+    team_id: str
+    persona: Persona
+    schedule: Schedule
+
+@dataclass
 class Pending:
-    kind: Literal["edit", "reason"]
+    kind: Literal["edit", "reason", "text", "subject", "to"]
     approval_id: str
+
+@dataclass
+class EditDraft:
+    """
+    The founder's version of a draft, built in Telegram one change at a time before approving.
+    """
+
+    approval_id: str
+    action: PlannedAction
+    original: PlannedAction
+    changes: list[str]
+    message_id: int | None = None
 
 @dataclass
 class PasswordMessage:
@@ -200,12 +219,15 @@ class AppState:
         self.pending = Saved(j, "pending", Pending, _tuple_key)
         self.status = Saved(j, "status", int, _tuple_key)
         self.passwords = Saved(j, "password", PasswordMessage, int)
+        self.schedules = Saved(j, "schedule", ScheduleCard, str)
+        self.edits = Saved(j, "editdraft", EditDraft, str)
         self.handled = SavedSet(j, "handled")
 
     def saved(self) -> dict[str, Saved | SavedSet]:
         containers = [
             self.approvals, self.actions, self.asks, self.offers, self.lessons, self.hire_cards,
             self.replacements, self.pending, self.status, self.passwords, self.handled,
+            self.schedules, self.edits,
         ]
         return {container.kind: container for container in containers}
 

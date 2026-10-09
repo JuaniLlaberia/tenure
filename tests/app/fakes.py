@@ -11,6 +11,7 @@ class Sent:
     thread_id: int | None
     text: str
     keyboard: Keyboard = field(default_factory=list)
+    photos: list[bytes] = field(default_factory=list)
 
     def data(self, label: str) -> str:
         for row in self.keyboard:
@@ -27,6 +28,7 @@ class FakeChat:
         self.pinned: list[int] = []
         self.deleted_topics: list[int] = []
         self.typing_calls = 0
+        self.files: dict[str, bytes] = {}
 
     async def send(self, chat_id, thread_id, text, keyboard=None) -> int:
         message_id = len(self.messages) + len(self.deleted) + 1
@@ -41,7 +43,8 @@ class FakeChat:
         del self.messages[message_id]
         self.deleted.append(message_id)
 
-    async def create_topic(self, chat_id, name) -> int:
+    async def create_topic(self, chat_id, name, icon=None) -> int:
+        self.icons = {**getattr(self, "icons", {}), name: icon}
         self.created_topics = getattr(self, "created_topics", 0) + 1
         self.topics[name] = 100 + self.created_topics
         return self.topics[name]
@@ -57,6 +60,21 @@ class FakeChat:
 
     async def typing(self, chat_id, thread_id) -> None:
         self.typing_calls += 1
+
+    async def send_photo(self, chat_id, thread_id, photo, caption="", keyboard=None) -> int:
+        message_id = await self.send(chat_id, thread_id, caption, keyboard)
+        self.messages[message_id].photos = [photo]
+        return message_id
+
+    async def send_album(self, chat_id, thread_id, photos, caption="") -> list[int]:
+        message_id = await self.send(chat_id, thread_id, caption)
+        self.messages[message_id].photos = list(photos)
+        return [message_id]
+
+    async def download(self, telegram_id) -> bytes:
+        if telegram_id not in self.files:
+            raise RuntimeError("Telegram couldn't find the file")
+        return self.files[telegram_id]
 
     def thread(self, thread_id: int | None) -> list[Sent]:
         return [m for m in self.messages.values() if m.thread_id == thread_id]
