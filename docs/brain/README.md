@@ -44,7 +44,7 @@ For every stage:
 | 4 | [Check](./stage-4-check.md) | 1, 2 | done |
 | 5 | [Specialist subgraph](./stage-5-specialist.md) | 1, 2 | done (tests waiting for review) |
 | 6 | [Team graph and facade (demo slice)](./stage-6-team-graph.md) | 3, 4, 5 | done (tests waiting for review) |
-| 7 | [Learning](./stage-7-learning.md) | 6 | not started |
+| 7 | [Learning](./stage-7-learning.md) | 6 | done (tests waiting for review) |
 | 8 | [Company graph (business onboarding)](./stage-8-company-graph.md) | 6 | not started |
 | 9 | [CLI, Postgres checkpointer, end to end](./stage-9-cli-and-e2e.md) | 6–8 | not started |
 

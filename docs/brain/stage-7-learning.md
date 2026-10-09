@@ -1,6 +1,6 @@
 # Stage 7: Learning
 
-**Status:** not started
+**Status:** done; tests waiting for Juan's review
 **Depends on:** stage 6
 **Spec:** [brain-engine.md](../specs/brain-engine.md) §7 (learning loop); [CONTRACT.md](../CONTRACT.md) §6 (`LessonLearned`), §11 (`Lesson`)
 
@@ -84,9 +84,19 @@ A message that is both feedback and work ("stop using hashtags, and post about F
 
 ## Done when
 
-- [ ] All tests above pass; earlier stages still pass
-- [ ] `ruff check` passes
+- [x] All tests above pass; earlier stages still pass
+- [x] `ruff check` passes
+- [ ] Juan has reviewed the tests
 
 ## Log
 
-_Empty._
+- Oct 8: implemented under `/goal implement stage 7`. Tests written first and run red (14 failed on stubs). `test_no_feedback_no_reflect_call` and `test_approved_drafts_become_examples` already passed: stage 5's context builder and stage 6's triage cover them. Then implemented: 262 passed, `ruff check` clean.
+- Tests added beyond the list above: `test_learn_drops_empty_and_duplicate_lessons` and `test_learn_passes_task_type_hint`.
+- `learn()` also skips a lesson whose text (case-insensitive) is already active, unless it validly replaces one. `replaces` is checked before the duplicate test, so a duplicate naming a missing lesson is dropped too.
+- `reflect()` takes an optional `task_type` hint (the approval's task type for edits and rejects); it's shown to the LLM, not forced on the lesson.
+- A business-wide lesson is shown where it was learned: `LessonLearned.team_id` is the current team, `business_wide=True`, and the saved `Lesson.team_id` is `None`.
+- Wiring: `TenureBrain` passes `_learn_from_chat` to the team graph (`source="chat"`, `source_ref=message_id`) and `_learn_from_approval` to `resolve_approval` (`source="edit"` / `"reject"`, `source_ref=approval_id`).
+- Live run (scratch script, real DeepSeek and Jev):
+  - "Never use emojis or hashtags. Also, write a post…" → lesson "Never use emojis or hashtags" before the draft, and the draft had neither.
+  - Editing that draft → "Mention a specific date and invite readers to a concrete action" and "Sign social posts as Juan" (both `social_post`).
+  - "FYI we never offer discounts, to anyone." → a business-wide `fact`, "Never offer discounts to anyone".

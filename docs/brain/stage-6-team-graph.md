@@ -190,4 +190,4 @@ All through `TenureBrain` with `FakeLLM`, `FakeJev`, `InMemoryStore`, `FakeTools
 - `RECURSION_LIMIT = 200` in the facade: dispatch loops one superstep per step, check and gate, and LangGraph's default of 25 is too low for 3 tasks with revisions.
 - LangGraph facts checked on 1.2.14: `aget_state(...).interrupts` is the pending `Ask`; new input on a paused thread restarts from START and drops it.
 - `start_onboarding` and `handle_message(team_id=None)` yield one recoverable `Error` until stage 8.
-- Not done here: contract v0.3 (`Trust.promote_after`) is merged from `dev` but the brain still promotes at a fixed 5, waiting for Juan's OK on v0.3.
+- Not done here: contract v0.3 (`Trust.promote_after`). Done later on Oct 8, in commit "Follow contract v0.3"; see the stage 3 log.

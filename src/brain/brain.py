@@ -1,4 +1,5 @@
 from collections.abc import AsyncIterator
+from typing import Literal
 
 from langgraph.checkpoint.memory import InMemorySaver
 from langgraph.types import Command
@@ -9,9 +10,10 @@ from brain.flows.approvals import resolve_approval
 from brain.flows.hire import hire_team
 from brain.flows.promotion import respond_promotion
 from brain.flows.undo import undo_action
-from brain.graphs.team import build_team_graph, new_request
+from brain.graphs.team import TeamState, build_team_graph, new_request
 from brain.helpers.jev import Jev, OpenRouterJev
 from brain.helpers.llm import LLM, OpenRouterLLM
+from brain.learning import learn
 from brain.templates.loader import load_templates, template_info
 from contract import (
     Approval,
@@ -39,7 +41,7 @@ class TenureBrain:
     def __init__(self, deps: Deps, checkpointer=None):
         self.deps = deps
         self.checkpointer = checkpointer or InMemorySaver()
-        self.team_graph = build_team_graph(deps, self.checkpointer)
+        self.team_graph = build_team_graph(deps, self.checkpointer, learn=self._learn_from_chat)
 
     def list_templates(self) -> list[TemplateInfo]:
         return [template_info(template) for template in self.deps.templates.values()]
@@ -56,7 +58,10 @@ class TenureBrain:
             yield event
 
     async def resolve_approval(self, decision: ApprovalDecision) -> AsyncIterator[Event]:
-        async for event in resolve_approval(self.deps, decision, revise=self._revise):
+        stream = resolve_approval(
+            self.deps, decision, learn=self._learn_from_approval, revise=self._revise
+        )
+        async for event in stream:
             yield event
 
     async def respond_promotion(self, response: PromotionResponse) -> AsyncIterator[Event]:
@@ -97,6 +102,36 @@ class TenureBrain:
             return
         team = await self.deps.store.get_team(hired)
         async for event in self._run(team, new_request(team, "", None)):
+            yield event
+
+    async def _learn_from_chat(self, state: TeamState, message: str) -> AsyncIterator[Event]:
+        stream = learn(
+            self.deps,
+            business_id=state["business_id"],
+            team_id=state["team_id"],
+            template=self.deps.templates[state["template"]],
+            source="chat",
+            source_ref=state.get("message_id"),
+            feedback=message,
+        )
+        async for event in stream:
+            yield event
+
+    async def _learn_from_approval(
+        self, approval: Approval, source: Literal["edit", "reject"], feedback: str
+    ) -> AsyncIterator[Event]:
+        team = await self.deps.store.get_team(approval.team_id)
+        stream = learn(
+            self.deps,
+            business_id=approval.business_id,
+            team_id=approval.team_id,
+            template=self.deps.templates[team.template],
+            source=source,
+            source_ref=approval.approval_id,
+            feedback=feedback,
+            task_type=approval.task_type,
+        )
+        async for event in stream:
             yield event
 
     async def _revise(self, approval: Approval, reason: str) -> AsyncIterator[Event]:
