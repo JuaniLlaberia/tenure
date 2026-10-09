@@ -13,7 +13,13 @@ async def test_hire_yields_team_hired_then_first_onboarding_ask(brain, collect, 
     assert isinstance(last, Ask)
     assert last.team_id == team_id
     assert last.persona.name == "Maya"
-    assert last.question == deps.templates["marketing"].onboarding["channels"]
+    channels = deps.templates["marketing"].onboarding["channels"]
+    assert last.question == channels.question
+    assert last.quick_replies == channels.quick_replies == [
+        "Bluesky and newsletter",
+        "Only Bluesky",
+        "Only the newsletter",
+    ]
     assert all(e.team_id == team_id for e in events[1:])
 
 async def test_onboarding_answers_become_team_facts(brain, collect, deps, message):
@@ -23,9 +29,9 @@ async def test_onboarding_answers_become_team_facts(brain, collect, deps, messag
 
     first = await collect(brain.handle_message(message(team, "Bluesky and LinkedIn", "m1")))
     assert isinstance(first[-1], Ask)
-    assert first[-1].question == questions["upcoming"]
+    assert first[-1].question == questions["upcoming"].question
     second = await collect(brain.handle_message(message(team, "We launch Friday", "m2")))
-    assert second[-1].question == questions["newsletter_to"]
+    assert second[-1].question == questions["newsletter_to"].question
     third = await collect(brain.handle_message(message(team, "list@b.co", "m3")))
 
     assert any(isinstance(e, OnboardingComplete) and e.scope == "team" for e in third)

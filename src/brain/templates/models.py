@@ -1,4 +1,4 @@
-from pydantic import BaseModel, Field, model_validator
+from pydantic import BaseModel, Field, field_validator, model_validator
 
 from brain.templates.registries import ACTIONS, OUTPUTS, TOOL_NAMES
 from contract import AutonomyLevel, Persona
@@ -24,6 +24,10 @@ class TaskTypeSpec(BaseModel):
     start_level: AutonomyLevel = AutonomyLevel.ACT_AFTER_APPROVAL
     max_level: AutonomyLevel | None = None
 
+class OnboardingQuestion(BaseModel):
+    question: str
+    quick_replies: list[str] = []
+
 class Limits(BaseModel):
     max_tasks_per_request: int = 3
     max_steps_per_specialist: int = 6
@@ -36,8 +40,19 @@ class Template(BaseModel):
     lead: LeadSpec
     specialists: dict[str, SpecialistSpec]
     task_types: dict[str, TaskTypeSpec]
-    onboarding: dict[str, str] = {}
+    onboarding: dict[str, OnboardingQuestion] = {}
     limits: Limits = Limits()
+
+    @field_validator("onboarding", mode="before")
+    @classmethod
+    def _plain_questions(cls, onboarding: dict) -> dict:
+        """
+        A question in YAML is a string, or a mapping with `question` and `quick_replies`.
+        """
+        return {
+            key: {"question": value} if isinstance(value, str) else value
+            for key, value in (onboarding or {}).items()
+        }
 
     def max_level(self, task_type: str) -> AutonomyLevel:
         spec = self.task_types[task_type]

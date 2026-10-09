@@ -134,3 +134,8 @@ def test_more_than_three_onboarding_questions(tmp_path):
 def test_empty_steps(tmp_path):
     with pytest.raises(TemplateError):
         load_template(write(tmp_path, changed(steps=[])))
+
+def test_onboarding_questions_can_be_plain_or_have_quick_replies():
+    template = load_templates()["marketing"]
+    assert template.onboarding["upcoming"].quick_replies == []
+    assert "Only Bluesky" in template.onboarding["channels"].quick_replies

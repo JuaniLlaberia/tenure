@@ -36,7 +36,9 @@ task_types:
     action: null
     start_level: act_and_report
 onboarding:
-  channels: "Which channels do you post on?"
+  channels:
+    question: "Which channels do you post on?"
+    quick_replies: ["Bluesky and newsletter", "Only Bluesky", "Only the newsletter"]
   upcoming: "Any launch or event coming up?"
   newsletter_to: "Which address or list should newsletters go to?"
 limits:

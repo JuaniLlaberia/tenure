@@ -60,7 +60,8 @@ async def test_onboard_hire_draft_and_post(brain: TenureBrain, store, tools: Fak
     await say(flows, "Here's our site: https://bright.example")
     await tap(flows, chat.find("Setup done"), "Marketing")
     thread_id = chat.topics["Marketing"]
-    for answer in ["Bluesky", "We launch Friday", "list@b.co"]:
+    await tap(flows, chat.find("Which channels"), "Bluesky and newsletter")
+    for answer in ["We launch Friday", "list@b.co"]:
         await say(flows, answer, thread_id)
     await say(flows, "We launch Friday, get the word out", thread_id)
     card = chat.find("Draft for approval")
