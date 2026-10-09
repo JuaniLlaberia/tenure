@@ -1,14 +1,15 @@
 from pydantic import BaseModel
 
-MAX_ISSUES = 5
+MAX_ISSUES = 3
 
 class CriticReport(BaseModel):
     issues: list[str]
 
 SYSTEM = (
     "You review a draft written for a small business before the founder sees it. "
-    "List each concrete problem: which rule or lesson it breaks, and what to change. "
-    f"Give at most {MAX_ISSUES} short issues. Don't rewrite the draft. "
+    "List only real problems: a broken rule or lesson, an invented fact, a missing requirement. "
+    f"Give at most {MAX_ISSUES} issues, most important first, each one short sentence (under 20 "
+    "words) naming the problem and the fix. Don't rewrite the draft or explain. "
     'Reply as JSON: {"issues": ["..."]}.'
 )
 

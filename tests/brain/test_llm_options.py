@@ -48,9 +48,11 @@ async def test_reasoning_can_be_turned_off():
     requests = []
     llm = llm_recording(Settings(openrouter_api_key="k", llm_reasoning=False), requests)
 
+    await llm.complete("m", MESSAGES, reasoning=True)
     await llm.complete("m", MESSAGES)
 
     assert requests[0]["reasoning"] == {"enabled": False}
+    assert "reasoning" not in requests[1]
 
 async def test_requests_let_openrouter_pick_the_provider_by_default():
     requests = []
@@ -67,4 +69,21 @@ async def test_provider_can_be_pinned():
 
     await llm.complete("m", MESSAGES)
 
-    assert requests[0]["provider"] == {"only": ["alibaba"], "allow_fallbacks": False}
+    assert requests[0]["provider"] == {"order": ["alibaba"], "allow_fallbacks": True}
+
+async def test_each_call_can_turn_reasoning_on_or_off():
+    requests = []
+    llm = llm_recording(Settings(openrouter_api_key="k"), requests)
+
+    await llm.complete("m", MESSAGES, reasoning=True)
+    await llm.complete("m", MESSAGES, reasoning=False)
+
+    assert [r["reasoning"] for r in requests] == [{"enabled": True}, {"enabled": False}]
+
+async def test_llm_reasoning_false_wins_over_the_call():
+    requests = []
+    llm = llm_recording(Settings(openrouter_api_key="k", llm_reasoning=False), requests)
+
+    await llm.complete("m", MESSAGES, reasoning=True)
+
+    assert requests[0]["reasoning"] == {"enabled": False}

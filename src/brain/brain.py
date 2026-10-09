@@ -114,6 +114,7 @@ class TenureBrain:
             source="chat",
             source_ref=state.get("message_id"),
             feedback=message,
+            reasoning=state.get("reasoning", False),
         )
         async for event in stream:
             yield event

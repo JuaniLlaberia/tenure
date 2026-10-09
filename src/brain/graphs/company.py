@@ -19,6 +19,7 @@ from brain.prompts.chief_of_staff import (
     question_messages,
     reply_messages,
 )
+from brain.reasoning import needs_reasoning
 from contract import Ask, BusinessProfile, Event, Lesson, OnboardingComplete, Persona, Say
 
 log = logging.getLogger(__name__)
@@ -118,7 +119,9 @@ def build_company_graph(deps: Deps, checkpointer) -> CompiledStateGraph:
             state.get("unclear", False),
         )
         try:
-            completion = await deps.llm.complete(deps.settings.model_lead, messages)
+            completion = await deps.llm.complete(
+                deps.settings.model_lead, messages, reasoning=False
+            )
             text = (completion.text or "").strip()
         except Exception as error:
             log.warning("Chief of staff question failed, using a fixed one: %s", error)
@@ -146,6 +149,7 @@ def build_company_graph(deps: Deps, checkpointer) -> CompiledStateGraph:
                 deps.settings.model_lead,
                 extract_messages(state["question"], answer, pages, draft),
                 Extraction,
+                reasoning=False,
             )
             found = result.value
         except Exception as error:
@@ -202,10 +206,12 @@ def build_company_graph(deps: Deps, checkpointer) -> CompiledStateGraph:
     async def chief_reply(state: CompanyState) -> dict:
         profile = await deps.store.get_profile(state["business_id"])
         teams = await deps.store.list_teams(state["business_id"])
-        messages = reply_messages(
-            CHIEF_OF_STAFF, profile, teams, list(deps.templates), state.get("message") or ""
+        message = state.get("message") or ""
+        messages = reply_messages(CHIEF_OF_STAFF, profile, teams, list(deps.templates), message)
+        reasoning, _ = await needs_reasoning(deps, f"The founder wrote:\n{message}")
+        completion = await deps.llm.complete(
+            deps.settings.model_lead, messages, reasoning=reasoning
         )
-        completion = await deps.llm.complete(deps.settings.model_lead, messages)
         text = (completion.text or "").strip() or "Got it."
         emit(Say(team_id=None, persona=CHIEF_OF_STAFF, text=text))
         return {}

@@ -20,6 +20,7 @@ class Settings(BaseModel):
     model_lead: str = "deepseek/deepseek-v4-flash-0731"
     model_specialist: str = "deepseek/deepseek-v4-flash-0731"
     model_reflect: str = "deepseek/deepseek-v4-flash-0731"
+    model_critic: str = "anthropic/claude-sonnet-5.5"
     model_decide_fallback: str = "deepseek/deepseek-v4-flash-0731"
     model_jev: str = "typesafe/jev-1.13"
     llm_reasoning: bool = True

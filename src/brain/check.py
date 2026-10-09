@@ -60,9 +60,13 @@ async def run_check(
     )
 
 async def _critic(deps: Deps, spec: TaskTypeSpec, review: str) -> tuple[list[str], int]:
+    """
+    The critic model chooses how much to think: Sonnet can't turn reasoning off and barely
+    uses it here.
+    """
     try:
         result = await deps.llm.structured(
-            deps.settings.model_reflect, critic_messages(review), CriticReport
+            deps.settings.model_critic, critic_messages(review), CriticReport
         )
     except Exception as error:
         log.warning("Critic failed, falling back to the rules: %s", error)

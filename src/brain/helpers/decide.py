@@ -124,7 +124,7 @@ async def _ask_llm(
     try:
         messages = _fallback_messages(questions, state)
         result = await deps.llm.structured(
-            deps.settings.model_decide_fallback, messages, DecideFallback
+            deps.settings.model_decide_fallback, messages, DecideFallback, reasoning=False
         )
     except Exception as error:
         log.warning("Decide fallback failed, using safe options: %s", error)

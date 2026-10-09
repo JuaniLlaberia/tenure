@@ -73,6 +73,7 @@ async def test_triage_is_one_jev_call_with_team_context(
     _, state, questions = jev.calls[0]
     assert set(questions) == {
         "has_feedback",
+        "needs_reasoning",
         "needs_social_post",
         "needs_newsletter",
         "needs_competitor_check",

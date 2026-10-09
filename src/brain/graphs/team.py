@@ -28,6 +28,7 @@ from brain.prompts.lead import (
     report_text,
     triage_state,
 )
+from brain.reasoning import NEEDS_REASONING, needs_reasoning, wants_reasoning
 from brain.templates.models import Template
 from brain.templates.registries import OUTPUTS
 from contract import (
@@ -58,6 +59,7 @@ class TaskState(BaseModel):
     outputs: dict[str, dict] = {}
     feedback: list[str] = []
     check_confidence: float | None = None
+    reasoning: bool = False
 
 class TeamState(TypedDict, total=False):
     business_id: str
@@ -69,6 +71,7 @@ class TeamState(TypedDict, total=False):
     feedback: str | None
     onboarded: bool
     reply_reason: str | None
+    reasoning: bool
     routed: list[str]
     plan_question: str | None
     clarified: int
@@ -95,6 +98,7 @@ def new_request(team: Team, text: str, message_id: str | None) -> TeamState:
         "revise": None,
         "feedback": None,
         "reply_reason": None,
+        "reasoning": False,
         "routed": [],
         "plan_question": None,
         "clarified": 0,
@@ -163,7 +167,10 @@ def build_team_graph(
             f"The founder rejected your last draft:\n{approval.preview}\n"
             f"Their reason: {state.get('feedback') or 'none given'}"
         ]
-        return TaskState(task=task, feedback=feedback)
+        reasoning, _ = await needs_reasoning(
+            deps, f"Task: {task.title}\nBrief: {task.brief}\n\n{feedback[0]}"
+        )
+        return TaskState(task=task, feedback=feedback, reasoning=reasoning)
 
     def after_entry(state: TeamState) -> str:
         if state.get("revise") and state.get("order"):
@@ -200,8 +207,14 @@ def build_team_graph(
             return {}
         template = template_of(state)
         key = pending[0]
-        question = template.onboarding[key]
-        ask = Ask(team_id=state["team_id"], persona=template.lead.persona, question=question)
+        spec = template.onboarding[key]
+        question = spec.question
+        ask = Ask(
+            team_id=state["team_id"],
+            persona=template.lead.persona,
+            question=question,
+            quick_replies=spec.quick_replies,
+        )
         answer = str(interrupt(ask.model_dump(mode="json")))
         await save_fact(state, key, question, answer)
         return {"onboarding_answers": {**(state.get("onboarding_answers") or {}), key: answer}}
@@ -262,13 +275,19 @@ def build_team_graph(
         No task type means no work: the lead just replies.
         """
         template = template_of(state)
-        questions = {"has_feedback": HAS_FEEDBACK, **route_questions(template)}
+        questions = {
+            "has_feedback": HAS_FEEDBACK,
+            "needs_reasoning": NEEDS_REASONING,
+            **route_questions(template),
+        }
         decisions = await decide(deps, questions, triage_state(template, state["request"]))
+        reasoning = wants_reasoning(deps, decisions)
         if learn is not None and decisions["has_feedback"].accepts("yes", threshold):
-            async for event in learn(state, state["request"]):
+            async for event in learn({**state, "reasoning": reasoning}, state["request"]):
                 emit(event)
         return {
             "routed": routed_from(template, decisions),
+            "reasoning": reasoning,
             "reply_reason": "chat",
             "tokens_used": state.get("tokens_used", 0) + decisions.tokens,
         }
@@ -279,7 +298,9 @@ def build_team_graph(
         messages = reply_messages(
             template, state["request"], context, no_match=state.get("reply_reason") == "no_match"
         )
-        completion = await deps.llm.complete(deps.settings.model_lead, messages)
+        completion = await deps.llm.complete(
+            deps.settings.model_lead, messages, reasoning=state.get("reasoning", False)
+        )
         emit(
             Say(
                 team_id=state["team_id"],
@@ -316,6 +337,7 @@ def build_team_graph(
                 deps.settings.model_lead,
                 plan_messages(template, state["routed"], state["request"], context),
                 LeadPlan,
+                reasoning=True,
             )
             lead_plan, tokens = result.value, tokens + result.tokens
         except Exception as error:
@@ -348,7 +370,8 @@ def build_team_graph(
                 updated_at=now,
             )
             await deps.store.save_task(task)
-            tasks[task.task_id] = TaskState(task=task).model_dump(mode="json")
+            ts = TaskState(task=task, reasoning=state.get("reasoning", False))
+            tasks[task.task_id] = ts.model_dump(mode="json")
             order.append(task.task_id)
         return {"plan_question": None, "tasks": tasks, "order": order, "tokens_used": tokens}
 
@@ -418,6 +441,7 @@ def build_team_graph(
                     "brief": task.brief,
                     "context": context,
                     "max_steps": template.limits.max_steps_per_specialist,
+                    "reasoning": ts.reasoning,
                 },
             )
         except Exception:

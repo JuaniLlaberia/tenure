@@ -176,6 +176,7 @@ class LLMCall:
     messages: list[Message]
     tools: list[ToolDef] | None = None
     schema: type[BaseModel] | None = None
+    reasoning: bool | None = None
 
 class FakeLLM:
     """
@@ -198,9 +199,15 @@ class FakeLLM:
         self._used: dict[str, int] = defaultdict(int)
 
     async def complete(
-        self, model: str, messages: list[Message], tools: list[ToolDef] | None = None
+        self,
+        model: str,
+        messages: list[Message],
+        tools: list[ToolDef] | None = None,
+        reasoning: bool | None = None,
     ) -> Completion:
-        self.calls.append(LLMCall("complete", model, list(messages), tools=tools))
+        self.calls.append(
+            LLMCall("complete", model, list(messages), tools=tools, reasoning=reasoning)
+        )
         if self.fail:
             raise LLMError("fake failure")
         if callable(self.completions):
@@ -212,9 +219,11 @@ class FakeLLM:
         return completion.model_copy(update={"tokens": completion.tokens or self.tokens_per_call})
 
     async def structured(
-        self, model: str, messages: list[Message], schema: type[T]
+        self, model: str, messages: list[Message], schema: type[T], reasoning: bool | None = None
     ) -> Structured[T]:
-        self.calls.append(LLMCall("structured", model, list(messages), schema=schema))
+        self.calls.append(
+            LLMCall("structured", model, list(messages), schema=schema, reasoning=reasoning)
+        )
         if self.fail:
             raise LLMError("fake failure")
         response = self.structured_responses.get(schema.__name__)
