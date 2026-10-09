@@ -73,6 +73,8 @@ async def test_triage_is_one_jev_call_with_team_context(
     _, state, questions = jev.calls[0]
     assert set(questions) == {
         "has_feedback",
+        "needs_reasoning",
+        "names_channels",
         "needs_social_post",
         "needs_newsletter",
         "needs_competitor_check",
@@ -181,6 +183,21 @@ async def test_unclear_request_asks_then_resumes(
     assert len(clarity_calls) == 1
     plan_calls = [c for c in llm.calls if c.schema is not None and c.schema.__name__ == "LeadPlan"]
     assert "Friday" in str(plan_calls[-1].messages)
+
+async def test_a_plain_yes_keeps_the_planned_work(
+    brain, collect, jev, script, team, message
+):
+    script(task_types=("social_post", "newsletter"), clear=0.2, question="Post and newsletter?")
+    first = await collect(brain.handle_message(message(team, "Start the launch campaign")))
+    assert first[-1].question == "Post and newsletter?"
+
+    jev.answers["needs_social_post"] = jev.answers["needs_newsletter"] = 0.1
+    second = await collect(brain.handle_message(message(team, "yes", "m2")))
+
+    assert {d.task_type for d in of(second, NeedsApproval)} == {"social_post", "newsletter"}
+    assert not of(second, Ask)
+    routing = [state for _, state, questions in jev.calls if "needs_newsletter" in questions]
+    assert "Maya: Post and newsletter?\nFounder: yes" in routing[-1]
 
 async def test_failed_check_reruns_writer_with_feedback(
     brain, collect, deps, jev, llm, script, team, message
@@ -329,3 +346,69 @@ async def test_graph_store_failure_yields_error(brain, collect, deps, script, te
 
     assert of(events, Error)
     assert events[-1].recoverable
+
+async def test_specialists_get_their_craft_instructions(
+    brain, collect, deps, llm, script, team, message
+):
+    script()
+    await collect(brain.handle_message(message(team, "Post about our Friday launch")))
+    writer = prompts_for(llm, "Leo")[0]
+    assert deps.templates["marketing"].specialists["writer"].instructions[:40] in writer
+    assert "How you work:" in writer
+
+async def test_a_campaign_without_channels_asks_where_it_goes(
+    brain, collect, jev, script, team, message
+):
+    script(task_types=("social_post", "newsletter"), named=0.1)
+    first = await collect(brain.handle_message(message(team, "Start a campaign for our launch")))
+    ask = first[-1]
+    assert isinstance(ask, Ask) and ask.question == "Where should this go out?"
+    assert ask.quick_replies == ["Bluesky and newsletter", "Only Bluesky", "Only the newsletter"]
+    assert not of(first, NeedsApproval)
+
+    jev.answers["needs_newsletter"] = 0.1
+    second = await collect(brain.handle_message(message(team, "Only Bluesky", "m2")))
+
+    assert [d.task_type for d in of(second, NeedsApproval)] == ["social_post"]
+
+async def test_naming_a_channel_skips_the_question(brain, collect, script, team, message):
+    script(named=0.9)
+    events = await collect(brain.handle_message(message(team, "Make a Bluesky post")))
+    assert of(events, NeedsApproval) and not of(events, Ask)
+
+async def test_a_follow_up_sees_the_previous_request(
+    brain, collect, llm, script, team, message
+):
+    script(task_types=("newsletter",))
+    await collect(brain.handle_message(message(team, "Email about the Nov 15 app launch")))
+    script(task_types=("social_post",))
+    await collect(brain.handle_message(message(team, "Now make a Bluesky post", "m2")))
+
+    plans = [c for c in llm.calls if c.schema is not None and c.schema.__name__ == "LeadPlan"]
+    latest = str(plans[-1].messages)
+    assert "Recent requests to this team" in latest
+    assert "Email about the Nov 15 app launch" in latest
+
+async def test_the_check_sees_what_the_founder_asked(
+    brain, collect, jev, script, team, message
+):
+    script()
+    await collect(brain.handle_message(message(team, "Announce our new dark mode on Bluesky")))
+    checks = [state for _, state, questions in jev.calls if "passes_check" in questions]
+    assert "What the founder asked for:\nAnnounce our new dark mode on Bluesky" in checks[0]
+
+async def test_running_out_after_a_draft_still_sends_it_for_approval(
+    brain, collect, deps, jev, script, team, message
+):
+    marketing = deps.templates["marketing"]
+    deps.templates["marketing"] = marketing.model_copy(
+        update={"limits": marketing.limits.model_copy(update={"token_budget": 120})}
+    )
+    script(passes=0.1)
+
+    events = await collect(brain.handle_message(message(team, "Post about our Friday launch")))
+
+    (draft,) = of(events, NeedsApproval)
+    assert draft.check_confidence == 0.0
+    assert any("within budget" in e.text for e in of(events, Say))
+    assert not of(events, Error)

@@ -140,8 +140,16 @@ def script(jev, llm):
         passes=0.9,
         plan=None,
         question=None,
+        named=0.9,
     ):
-        jev.answers.update({"has_feedback": feedback, "is_clear": clear, "passes_check": passes})
+        jev.answers.update(
+            {
+                "has_feedback": feedback,
+                "is_clear": clear,
+                "passes_check": passes,
+                "names_channels": named,
+            }
+        )
         routed = task_types if work >= 0.5 else ()
         for task_type in TITLES:
             jev.answers[f"needs_{task_type}"] = 0.9 if task_type in routed else 0.1

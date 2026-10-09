@@ -11,7 +11,9 @@ def reflect_messages(
     system = (
         f"You help an AI {template.display_name.lower()} team learn from its founder. "
         f"Turn the founder's feedback into at most {MAX_LESSONS} short lessons, or none if it "
-        "teaches nothing new.\n\n"
+        "teaches nothing new. A lesson must still hold for future work: details of one "
+        "campaign (a launch date, which launch a draft was about, one product's news) are not "
+        "lessons.\n\n"
         "Each lesson has:\n"
         '- "text": short and imperative, e.g. "No emojis in posts", "Sign posts as Juan"\n'
         '- "kind": "fact" (something true about the business) or "preference" (how work '

@@ -25,10 +25,12 @@ class SpecialistState(TypedDict, total=False):
     specialist_id: str
     persona: Persona
     tool_names: list[str]
+    instructions: str
     output: str
     brief: str
     context: str
     max_steps: int
+    reasoning: bool
     messages: list[Message]
     pending: list[dict]
     steps: int
@@ -62,6 +64,7 @@ def build_specialist_graph(deps: Deps) -> CompiledStateGraph:
             brief,
             state.get("context", ""),
             OUTPUTS[state["output"]].guidance,
+            state.get("instructions", ""),
         )
         return {"messages": messages, "pending": [], "steps": 0, "tokens": 0, "result": None}
 
@@ -70,6 +73,7 @@ def build_specialist_graph(deps: Deps) -> CompiledStateGraph:
             deps.settings.model_specialist,
             state["messages"],
             tool_defs(state["tool_names"]) or None,
+            reasoning=state.get("reasoning", False),
         )
         message: Message = {"role": "assistant", "content": completion.text or ""}
         pending = [call.model_dump() for call in completion.tool_calls]
@@ -119,7 +123,10 @@ def build_specialist_graph(deps: Deps) -> CompiledStateGraph:
             messages = messages[:-1]
         schema = OUTPUTS[state["output"]].schema
         result = await deps.llm.structured(
-            deps.settings.model_specialist, [*messages, final_message(schema)], schema
+            deps.settings.model_specialist,
+            [*messages, final_message(schema)],
+            schema,
+            reasoning=state.get("reasoning", False),
         )
         return {"result": result.value.model_dump(), "tokens": state["tokens"] + result.tokens}
 

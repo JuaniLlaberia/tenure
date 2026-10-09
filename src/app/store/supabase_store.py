@@ -11,6 +11,7 @@ from contract import (
     AuditEntry,
     BusinessProfile,
     Lesson,
+    ModelUsage,
     Task,
     Team,
     Trust,
@@ -141,6 +142,17 @@ class SupabaseStore:
         )
         return [AuditEntry.model_validate(row) for row in (await query.execute()).data]
 
+    async def list_usage(self, business_id: str, since: datetime) -> list[ModelUsage]:
+        db = await self._db()
+        query = (
+            db.table("model_usage")
+            .select("*")
+            .eq("business_id", business_id)
+            .gte("at", since.isoformat())
+            .order("at", desc=True)
+        )
+        return [ModelUsage.model_validate(row) for row in (await query.execute()).data]
+
     async def list_all_lessons(self, business_id: str) -> list[Lesson]:
         db = await self._db()
         query = (
@@ -247,3 +259,7 @@ class SupabaseStore:
 
     async def get_action(self, action_id: str) -> AuditEntry | None:
         return await self._get("audit_log", AuditEntry, action_id=action_id)
+
+    async def log_usage(self, usage: ModelUsage) -> None:
+        db = await self._db()
+        await db.table("model_usage").insert(_row(usage)).execute()

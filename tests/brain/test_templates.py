@@ -58,7 +58,7 @@ def test_marketing_template_loads(marketing):
     assert marketing.task_types["competitor_check"].action is None
     assert marketing.specialists["researcher"].tools == ["web_search", "fetch_page", "read_memory"]
     assert marketing.limits == Limits(
-        max_tasks_per_request=3, max_steps_per_specialist=6, token_budget=60000
+        max_tasks_per_request=3, max_steps_per_specialist=6, token_budget=150000
     )
 
 def test_max_level_defaults_to_start_level(marketing):
@@ -134,3 +134,8 @@ def test_more_than_three_onboarding_questions(tmp_path):
 def test_empty_steps(tmp_path):
     with pytest.raises(TemplateError):
         load_template(write(tmp_path, changed(steps=[])))
+
+def test_onboarding_questions_can_be_plain_or_have_quick_replies():
+    template = load_templates()["marketing"]
+    assert template.onboarding["upcoming"].quick_replies == []
+    assert "Only Bluesky" in template.onboarding["channels"].quick_replies

@@ -22,6 +22,7 @@ from contract.models.business import BusinessProfile
 from contract.models.learning import Lesson
 from contract.models.tasks import Approval, Task, TaskStatus
 from contract.models.team import Persona, Team
+from contract.models.usage import ModelUsage
 
 __all__ = [
     "ActionDone",
@@ -39,6 +40,7 @@ __all__ = [
     "IncomingMessage",
     "Lesson",
     "LessonLearned",
+    "ModelUsage",
     "NeedsApproval",
     "OnboardingComplete",
     "PageContent",

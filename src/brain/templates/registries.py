@@ -128,7 +128,8 @@ OUTPUTS: dict[str, OutputType] = {
         validate=_validate_post,
         guidance=(
             f"One Bluesky post of at most {POST_LIMIT} characters, counting spaces and line "
-            "breaks; aim for about 250. Plain text, no placeholders."
+            "breaks; aim for about 250. The first line is the hook and has to stop the scroll. "
+            "One idea, one link at most, no more than two hashtags. Plain text, no placeholders."
         ),
     ),
     "email": OutputType(
@@ -143,7 +144,10 @@ OUTPUTS: dict[str, OutputType] = {
         validate=_validate_email,
         guidance=(
             "An email with a recipient address (the newsletter address or list from what you "
-            "know), a clear subject line and a plain-text body with one call to action."
+            "know), a subject line under 60 characters that makes them want to open it (a "
+            "benefit, a tension or a specific detail, not a generic announcement), an opening "
+            "line that pulls them in, short paragraphs, and one call to action that starts with "
+            "a verb."
         ),
     ),
     "report": OutputType(

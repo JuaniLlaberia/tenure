@@ -160,7 +160,8 @@ def create_api(
 
     @api.get("/b/{token}/api/overview")
     async def overview(token: str, request: Request) -> dict[str, Any]:
-        return await build_overview(store, brain, await business(request, token), clock())
+        business_id = await business(request, token)
+        return await build_overview(store, brain, business_id, clock(), flows.deciding)
 
     @api.post("/b/{token}/api/hire")
     async def hire(token: str, body: Hire, request: Request) -> dict[str, str]:

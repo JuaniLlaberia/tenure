@@ -63,7 +63,10 @@ def examples_section(approvals: list[Approval]) -> str:
     if not liked:
         return ""
     drafts = [a.edited_text if a.status == "edited" and a.edited_text else a.preview for a in liked]
-    return "Drafts the founder approved (match their style):\n" + "\n---\n".join(drafts)
+    return (
+        "Drafts the founder approved (match their style only; their facts and dates may be "
+        "out of date):\n" + "\n---\n".join(drafts)
+    )
 
 def prior_section(prior_outputs: dict[str, dict]) -> str:
     if not prior_outputs:
@@ -83,4 +86,4 @@ def prior_section(prior_outputs: dict[str, dict]) -> str:
 def feedback_section(feedback: list[str]) -> str:
     if not feedback:
         return ""
-    return "Fix these before anything else:\n" + "\n".join(f"- {item}" for item in feedback)
+    return "Fix these, staying on your brief:\n" + "\n".join(f"- {item}" for item in feedback)

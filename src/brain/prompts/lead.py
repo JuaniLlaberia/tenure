@@ -21,6 +21,13 @@ HAS_FEEDBACK = Question.yes_no(
     no="No feedback; it's only a request, a question or small talk",
 )
 
+NAMES_CHANNELS = Question.yes_no(
+    "Does the founder's message say where it should go out: a channel or a format like a "
+    "Bluesky or social post, a newsletter or an email?",
+    yes="Yes: it names at least one channel or format",
+    no="No: it asks for a campaign or promotion without saying where",
+)
+
 IS_CLEAR = Question(
     instructions=(
         "Given the founder's request and the plan, is there enough information to do the work well "
@@ -64,7 +71,11 @@ def _lead_system(template: Template) -> str:
     )
 
 def plan_messages(
-    template: Template, routed: list[str], request: str, context: str
+    template: Template,
+    routed: list[str],
+    request: str,
+    context: str,
+    history: list[str] | None = None,
 ) -> list[Message]:
     wanted = "\n".join(
         f"- {task_type}: {template.task_types[task_type].description}" for task_type in routed
@@ -75,11 +86,18 @@ def plan_messages(
         + wanted
         + "\n\nEach task has a short title for the dashboard and a brief for your specialists: "
         "what to make, for whom, the key facts and dates, and the angle. Only use facts from the "
-        "request and the context. If something essential is missing, also give the one question "
-        'you would ask the founder in "question"; otherwise leave it null. '
+        "request and the context. The task types above are already decided: never ask which "
+        "pieces or channels to make. If a fact you can't do without is missing (like the date or "
+        'the offer), give the one question you would ask the founder in "question"; otherwise '
+        "leave it null. A short follow-up (like \"now a post\" or \"also email them\") continues "
+        "the most recent request: keep its facts, dates and angle unless the founder changes "
+        "them. Older approved drafts and onboarding answers may be about earlier launches; the "
+        "request and recent requests win. "
         'Reply as JSON: {"tasks": [{"task_type", "title", "brief"}], "question": null}.'
     )
     user = f"Founder's request:\n{request}"
+    if history:
+        user += "\n\nRecent requests to this team, oldest first:\n" + "\n---\n".join(history)
     if context:
         user += f"\n\n{context}"
     return [{"role": "system", "content": system}, {"role": "user", "content": user}]

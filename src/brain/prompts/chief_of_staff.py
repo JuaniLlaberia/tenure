@@ -1,4 +1,4 @@
-from pydantic import BaseModel
+from pydantic import BaseModel, field_validator
 
 from brain.context import MAX_FETCH_CHARS, profile_section
 from brain.helpers.decide import Question
@@ -15,9 +15,32 @@ class ProfileDraft(BaseModel):
     links: list[str] = []
     extra: dict[str, str] = {}
 
+    @field_validator("main_clients", "links", mode="before")
+    @classmethod
+    def _as_list(cls, value):
+        return _as_list(value)
+
+    @field_validator("extra", mode="before")
+    @classmethod
+    def _as_dict(cls, value):
+        return value or {}
+
 class Extraction(BaseModel):
     fields: ProfileDraft
     facts: list[str] = []
+
+    @field_validator("facts", mode="before")
+    @classmethod
+    def _as_list(cls, value):
+        return _as_list(value)
+
+def _as_list(value):
+    """
+    Models often send null or one string where a list belongs; both are fine.
+    """
+    if value is None:
+        return []
+    return [value] if isinstance(value, str) else value
 
 FIELDS = {
     "name": "the business's name",

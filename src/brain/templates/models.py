@@ -1,4 +1,4 @@
-from pydantic import BaseModel, Field, model_validator
+from pydantic import BaseModel, Field, field_validator, model_validator
 
 from brain.templates.registries import ACTIONS, OUTPUTS, TOOL_NAMES
 from contract import AutonomyLevel, Persona
@@ -14,6 +14,7 @@ class LeadSpec(BaseModel):
 class SpecialistSpec(BaseModel):
     persona: Persona
     tools: list[str] = []
+    instructions: str = ""
 
 class TaskTypeSpec(BaseModel):
     description: str
@@ -23,6 +24,10 @@ class TaskTypeSpec(BaseModel):
     action: str | None = None
     start_level: AutonomyLevel = AutonomyLevel.ACT_AFTER_APPROVAL
     max_level: AutonomyLevel | None = None
+
+class OnboardingQuestion(BaseModel):
+    question: str
+    quick_replies: list[str] = []
 
 class Limits(BaseModel):
     max_tasks_per_request: int = 3
@@ -36,12 +41,30 @@ class Template(BaseModel):
     lead: LeadSpec
     specialists: dict[str, SpecialistSpec]
     task_types: dict[str, TaskTypeSpec]
-    onboarding: dict[str, str] = {}
+    onboarding: dict[str, OnboardingQuestion] = {}
+    channel_question: OnboardingQuestion | None = None
     limits: Limits = Limits()
+
+    @field_validator("onboarding", mode="before")
+    @classmethod
+    def _plain_questions(cls, onboarding: dict) -> dict:
+        """
+        A question in YAML is a string, or a mapping with `question` and `quick_replies`.
+        """
+        return {
+            key: {"question": value} if isinstance(value, str) else value
+            for key, value in (onboarding or {}).items()
+        }
 
     def max_level(self, task_type: str) -> AutonomyLevel:
         spec = self.task_types[task_type]
         return spec.max_level or spec.start_level
+
+    def channel_task_types(self) -> list[str]:
+        """
+        Task types that go out somewhere (they have an action), like a post or an email.
+        """
+        return [name for name, spec in self.task_types.items() if spec.action]
 
     def personas(self) -> list[Persona]:
         return [self.lead.persona] + [spec.persona for spec in self.specialists.values()]

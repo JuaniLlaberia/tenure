@@ -28,6 +28,7 @@ async def run_check(
     output: BaseModel,
     lessons: list[Lesson],
     profile: BusinessProfile | None = None,
+    asked: str = "",
 ) -> CheckResult:
     """
     Independent review of a finished draft: hard validators, then pass / revise through
@@ -39,7 +40,7 @@ async def run_check(
         return CheckResult(passed=False, confidence=0.0, feedback=errors)
 
     draft = OUTPUTS[spec.output].preview(output)
-    review = review_text(task_type, spec, lessons, draft, profile)
+    review = review_text(task_type, spec, lessons, draft, profile, asked)
     decisions = await decide(deps, {"passes_check": PASSES_CHECK}, review)
     decision = decisions["passes_check"]
     if decision.source == "default":
@@ -60,9 +61,13 @@ async def run_check(
     )
 
 async def _critic(deps: Deps, spec: TaskTypeSpec, review: str) -> tuple[list[str], int]:
+    """
+    The critic model chooses how much to think: Sonnet can't turn reasoning off and barely
+    uses it here.
+    """
     try:
         result = await deps.llm.structured(
-            deps.settings.model_reflect, critic_messages(review), CriticReport
+            deps.settings.model_critic, critic_messages(review), CriticReport
         )
     except Exception as error:
         log.warning("Critic failed, falling back to the rules: %s", error)

@@ -7,6 +7,7 @@ from pydantic import BaseModel
 from brain.common import new_id
 from brain.deps import Deps
 from brain.prompts.reflect import MAX_LESSONS, reflect_messages
+from brain.reasoning import needs_reasoning
 from brain.templates.models import Template
 from contract import Event, Lesson, LessonLearned
 
@@ -28,6 +29,7 @@ async def reflect(
     feedback: str,
     existing: list[Lesson],
     task_type: str | None = None,
+    reasoning: bool = False,
 ) -> tuple[list[LessonDraft], int]:
     """
     One LLM call that turns feedback into lesson drafts. Raises if the call fails.
@@ -36,6 +38,7 @@ async def reflect(
         deps.settings.model_reflect,
         reflect_messages(template, feedback, existing, task_type),
         ReflectOutput,
+        reasoning=reasoning,
     )
     return result.value.lessons, result.tokens
 
@@ -49,6 +52,7 @@ async def learn(
     source_ref: str | None,
     feedback: str,
     task_type: str | None = None,
+    reasoning: bool | None = None,
 ) -> AsyncIterator[Event]:
     """
     Reflects on one piece of feedback, saves the lessons (replacing the ones they repeat or
@@ -56,8 +60,10 @@ async def learn(
     reflect fails, nothing is saved and nothing is yielded.
     """
     existing = await deps.store.list_lessons(business_id, team_id)
+    if reasoning is None:
+        reasoning, _ = await needs_reasoning(deps, f"Feedback to learn from:\n{feedback}")
     try:
-        drafts, _ = await reflect(deps, template, feedback, existing, task_type)
+        drafts, _ = await reflect(deps, template, feedback, existing, task_type, reasoning)
     except Exception as error:
         log.warning("Reflect failed, learning nothing from this feedback: %s", error)
         return

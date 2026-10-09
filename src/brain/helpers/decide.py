@@ -116,7 +116,7 @@ async def _ask_jev(
         decision = _from_jev(question, response.answers.get(key))
         if decision is not None:
             answers[key] = decision
-    return answers, response.input_tokens
+    return answers, response.input_tokens + response.output_tokens
 
 async def _ask_llm(
     deps: Deps, questions: dict[str, Question], state: str
@@ -124,7 +124,7 @@ async def _ask_llm(
     try:
         messages = _fallback_messages(questions, state)
         result = await deps.llm.structured(
-            deps.settings.model_decide_fallback, messages, DecideFallback
+            deps.settings.model_decide_fallback, messages, DecideFallback, reasoning=False
         )
     except Exception as error:
         log.warning("Decide fallback failed, using safe options: %s", error)

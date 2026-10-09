@@ -6,6 +6,7 @@ from contract.models.business import BusinessProfile
 from contract.models.learning import Lesson
 from contract.models.tasks import Approval, Task
 from contract.models.team import Team
+from contract.models.usage import ModelUsage
 
 class Store(Protocol):
     async def get_profile(self, business_id: str) -> BusinessProfile | None: ...
@@ -32,3 +33,5 @@ class Store(Protocol):
 
     async def log_action(self, entry: AuditEntry) -> None: ...
     async def get_action(self, action_id: str) -> AuditEntry | None: ...
+
+    async def log_usage(self, usage: ModelUsage) -> None: ...

@@ -20,6 +20,7 @@ from brain.helpers.decide import decide
 from brain.prompts.lead import (
     HAS_FEEDBACK,
     IS_CLEAR,
+    NAMES_CHANNELS,
     LeadPlan,
     TaskPlan,
     needs_question,
@@ -28,8 +29,10 @@ from brain.prompts.lead import (
     report_text,
     triage_state,
 )
+from brain.reasoning import NEEDS_REASONING, needs_reasoning, wants_reasoning
 from brain.templates.models import Template
 from brain.templates.registries import OUTPUTS
+from brain.usage import enter_task
 from contract import (
     ActionDone,
     Approval,
@@ -58,6 +61,7 @@ class TaskState(BaseModel):
     outputs: dict[str, dict] = {}
     feedback: list[str] = []
     check_confidence: float | None = None
+    reasoning: bool = False
 
 class TeamState(TypedDict, total=False):
     business_id: str
@@ -69,6 +73,9 @@ class TeamState(TypedDict, total=False):
     feedback: str | None
     onboarded: bool
     reply_reason: str | None
+    reasoning: bool
+    ask_channels: bool
+    history: list[str]
     routed: list[str]
     plan_question: str | None
     clarified: int
@@ -81,10 +88,12 @@ class TeamState(TypedDict, total=False):
 
 LearnHook = Callable[[TeamState, str], AsyncIterator[Event]]
 
+MAX_HISTORY = 5
+
 def new_request(team: Team, text: str, message_id: str | None) -> TeamState:
     """
     The input for a new run on a team's thread. Resets everything per request; keeps the
-    onboarding answers already in the checkpoint.
+    onboarding answers and the recent requests already in the checkpoint.
     """
     return {
         "business_id": team.business_id,
@@ -95,6 +104,8 @@ def new_request(team: Team, text: str, message_id: str | None) -> TeamState:
         "revise": None,
         "feedback": None,
         "reply_reason": None,
+        "reasoning": False,
+        "ask_channels": False,
         "routed": [],
         "plan_question": None,
         "clarified": 0,
@@ -163,7 +174,10 @@ def build_team_graph(
             f"The founder rejected your last draft:\n{approval.preview}\n"
             f"Their reason: {state.get('feedback') or 'none given'}"
         ]
-        return TaskState(task=task, feedback=feedback)
+        reasoning, _ = await needs_reasoning(
+            deps, f"Task: {task.title}\nBrief: {task.brief}\n\n{feedback[0]}"
+        )
+        return TaskState(task=task, feedback=feedback, reasoning=reasoning)
 
     def after_entry(state: TeamState) -> str:
         if state.get("revise") and state.get("order"):
@@ -200,8 +214,14 @@ def build_team_graph(
             return {}
         template = template_of(state)
         key = pending[0]
-        question = template.onboarding[key]
-        ask = Ask(team_id=state["team_id"], persona=template.lead.persona, question=question)
+        spec = template.onboarding[key]
+        question = spec.question
+        ask = Ask(
+            team_id=state["team_id"],
+            persona=template.lead.persona,
+            question=question,
+            quick_replies=spec.quick_replies,
+        )
         answer = str(interrupt(ask.model_dump(mode="json")))
         await save_fact(state, key, question, answer)
         return {"onboarding_answers": {**(state.get("onboarding_answers") or {}), key: answer}}
@@ -262,15 +282,55 @@ def build_team_graph(
         No task type means no work: the lead just replies.
         """
         template = template_of(state)
-        questions = {"has_feedback": HAS_FEEDBACK, **route_questions(template)}
+        questions = {
+            "has_feedback": HAS_FEEDBACK,
+            "needs_reasoning": NEEDS_REASONING,
+            **route_questions(template),
+        }
+        if template.channel_question:
+            questions["names_channels"] = NAMES_CHANNELS
         decisions = await decide(deps, questions, triage_state(template, state["request"]))
+        reasoning = wants_reasoning(deps, decisions)
         if learn is not None and decisions["has_feedback"].accepts("yes", threshold):
-            async for event in learn(state, state["request"]):
+            async for event in learn({**state, "reasoning": reasoning}, state["request"]):
                 emit(event)
+        routed = routed_from(template, decisions)
+        goes_out = set(routed) & set(template.channel_task_types())
+        ask_channels = bool(
+            template.channel_question
+            and goes_out
+            and not decisions["names_channels"].accepts("yes", threshold)
+        )
         return {
-            "routed": routed_from(template, decisions),
+            "routed": routed,
+            "ask_channels": ask_channels,
+            "reasoning": reasoning,
             "reply_reason": "chat",
             "tokens_used": state.get("tokens_used", 0) + decisions.tokens,
+        }
+
+    def after_triage(state: TeamState) -> str:
+        if state.get("ask_channels"):
+            return "channels"
+        return "plan" if state["routed"] else "reply"
+
+    async def channels(state: TeamState) -> dict:
+        """
+        A campaign that doesn't say where it goes out: ask, then route again with the answer.
+        """
+        template = template_of(state)
+        spec = template.channel_question
+        lead = template.lead.persona
+        ask = Ask(
+            team_id=state["team_id"],
+            persona=lead,
+            question=spec.question,
+            quick_replies=spec.quick_replies,
+        )
+        answer = str(interrupt(ask.model_dump(mode="json")))
+        return {
+            "request": f"{state['request']}\n\n{lead.name}: {spec.question}\nFounder: {answer}",
+            "ask_channels": False,
         }
 
     async def reply(state: TeamState) -> dict:
@@ -279,7 +339,9 @@ def build_team_graph(
         messages = reply_messages(
             template, state["request"], context, no_match=state.get("reply_reason") == "no_match"
         )
-        completion = await deps.llm.complete(deps.settings.model_lead, messages)
+        completion = await deps.llm.complete(
+            deps.settings.model_lead, messages, reasoning=state.get("reasoning", False)
+        )
         emit(
             Say(
                 team_id=state["team_id"],
@@ -292,14 +354,15 @@ def build_team_graph(
     async def route(state: TeamState) -> dict:
         """
         Re-routes after the founder answered a clarifying question (no feedback check: the
-        original message was already triaged).
+        original message was already triaged). An answer that names no deliverable, like "yes",
+        keeps the work already planned.
         """
         template = template_of(state)
         decisions = await decide(
             deps, route_questions(template), triage_state(template, state["request"])
         )
         return {
-            "routed": routed_from(template, decisions),
+            "routed": routed_from(template, decisions) or state.get("routed", []),
             "reply_reason": "no_match",
             "tokens_used": state.get("tokens_used", 0) + decisions.tokens,
         }
@@ -314,8 +377,11 @@ def build_team_graph(
         try:
             result = await deps.llm.structured(
                 deps.settings.model_lead,
-                plan_messages(template, state["routed"], state["request"], context),
+                plan_messages(
+                    template, state["routed"], state["request"], context, state.get("history")
+                ),
                 LeadPlan,
+                reasoning=True,
             )
             lead_plan, tokens = result.value, tokens + result.tokens
         except Exception as error:
@@ -348,9 +414,19 @@ def build_team_graph(
                 updated_at=now,
             )
             await deps.store.save_task(task)
-            tasks[task.task_id] = TaskState(task=task).model_dump(mode="json")
+            ts = TaskState(task=task, reasoning=state.get("reasoning", False))
+            tasks[task.task_id] = ts.model_dump(mode="json")
             order.append(task.task_id)
-        return {"plan_question": None, "tasks": tasks, "order": order, "tokens_used": tokens}
+        planned = "\n".join(f"- {p.title}: {p.brief}" for p in plans)
+        entry = f"Founder: {state['request']}\nPlanned:\n{planned}"
+        history = [*(state.get("history") or []), entry][-MAX_HISTORY:]
+        return {
+            "plan_question": None,
+            "tasks": tasks,
+            "order": order,
+            "history": history,
+            "tokens_used": tokens,
+        }
 
     def after_plan(state: TeamState) -> str:
         return "clarify" if state.get("plan_question") else "dispatch"
@@ -363,8 +439,9 @@ def build_team_graph(
             question=state["plan_question"],
         )
         answer = str(interrupt(ask.model_dump(mode="json")))
+        lead = template.lead.persona.name
         return {
-            "request": f"{state['request']}\n\nFounder: {answer}",
+            "request": f"{state['request']}\n\n{lead}: {state['plan_question']}\nFounder: {answer}",
             "clarified": state.get("clarified", 0) + 1,
             "plan_question": None,
         }
@@ -376,16 +453,46 @@ def build_team_graph(
             if ts.phase == "done":
                 continue
             if state.get("tokens_used", 0) >= template.limits.token_budget:
-                message = f"I ran out of budget before finishing “{ts.task.title}”."
-                ts = await fail(state, ts, message)
-                return {"tasks": put(state, ts), "current": task_id, "next": "dispatch"}
+                return await over_budget(state, ts)
             steps = {"work": "specialist", "check": "check", "gate": "gate"}
             return {"current": task_id, "next": steps[ts.phase]}
         return {"current": None, "next": "report"}
 
+    def has_draft(ts: TaskState) -> bool:
+        return ts.task.steps[-1] in ts.outputs
+
+    async def over_budget(state: TeamState, ts: TaskState) -> dict:
+        """
+        Out of budget: a finished draft still goes to the founder, just without more checks or
+        rewrites (approving needs no tokens). Without a draft the task fails.
+        """
+        task_id = ts.task.task_id
+        if ts.phase == "gate":
+            return {"current": task_id, "next": "gate"}
+        if not has_draft(ts):
+            message = f"I ran out of budget before finishing “{ts.task.title}”."
+            ts = await fail(state, ts, message)
+            return {"tasks": put(state, ts), "current": task_id, "next": "dispatch"}
+        lead = template_of(state).lead.persona
+        emit(
+            Say(
+                team_id=state["team_id"],
+                task_id=task_id,
+                persona=lead,
+                text=(
+                    f"I stopped polishing “{ts.task.title}” to stay within budget. Here's the "
+                    "best draft so far."
+                ),
+            )
+        )
+        confidence = ts.check_confidence or 0.0
+        ts = ts.model_copy(update={"phase": "gate", "check_confidence": confidence})
+        return {"tasks": put(state, ts), "current": task_id, "next": "gate"}
+
     async def specialist(state: TeamState) -> dict:
         template = template_of(state)
         ts = load(state, state["current"])
+        enter_task(ts.task.task_id)
         task = ts.task
         step = task.current_step
         specialist_id = task.steps[step]
@@ -414,10 +521,12 @@ def build_team_graph(
                     "specialist_id": specialist_id,
                     "persona": spec.persona,
                     "tool_names": list(spec.tools),
+                    "instructions": spec.instructions,
                     "output": task_spec.output if is_last else "notes",
                     "brief": task.brief,
                     "context": context,
                     "max_steps": template.limits.max_steps_per_specialist,
+                    "reasoning": ts.reasoning,
                 },
             )
         except Exception:
@@ -443,6 +552,7 @@ def build_team_graph(
         template = template_of(state)
         lead = template.lead.persona
         ts = load(state, state["current"])
+        enter_task(ts.task.task_id)
         task = ts.task
         emit(
             Progress(
@@ -457,7 +567,10 @@ def build_team_graph(
         )
         profile = await deps.store.get_profile(state["business_id"])
         output = final_output(template, ts)
-        result = await run_check(deps, template, task.task_type, output, lessons, profile)
+        asked = state.get("request") or task.brief
+        result = await run_check(
+            deps, template, task.task_type, output, lessons, profile, asked
+        )
         tokens = state.get("tokens_used", 0) + result.tokens
         if result.passed or task.revisions >= MAX_REVISIONS:
             task = await save(task, tokens_used=task.tokens_used + result.tokens)
@@ -565,6 +678,7 @@ def build_team_graph(
         ("route", route),
         ("plan", plan),
         ("clarify", clarify),
+        ("channels", channels),
         ("dispatch", dispatch),
         ("specialist", specialist),
         ("check", check),
@@ -580,9 +694,8 @@ def build_team_graph(
     graph.add_edge("onboard_intro", "onboard")
     graph.add_conditional_edges("onboard", after_onboard, ["onboard", "onboard_done"])
     graph.add_edge("onboard_done", END)
-    graph.add_conditional_edges(
-        "triage", lambda s: "plan" if s["routed"] else "reply", ["plan", "reply"]
-    )
+    graph.add_conditional_edges("triage", after_triage, ["channels", "plan", "reply"])
+    graph.add_edge("channels", "route")
     graph.add_edge("reply", END)
     graph.add_conditional_edges(
         "route", lambda s: "plan" if s["routed"] else "reply", ["plan", "reply"]

@@ -10,6 +10,7 @@ from contract import (
     AuditEntry,
     BusinessProfile,
     Lesson,
+    ModelUsage,
     Task,
     Team,
     Trust,
@@ -37,6 +38,7 @@ class InMemoryStore:
         self._approvals: dict[str, Approval] = {}
         self._lessons: dict[str, Lesson] = {}
         self._actions: dict[str, AuditEntry] = {}
+        self._usage: list[ModelUsage] = []
         self._dashboards: dict[str, tuple[str | None, str | None]] = {}
         self._state: dict[tuple[str, str], tuple[Any, datetime]] = {}
 
@@ -92,6 +94,11 @@ class InMemoryStore:
         actions = [a for a in self._actions.values() if a.business_id == business_id]
         actions.sort(key=lambda a: a.at, reverse=True)
         return [_copy(a) for a in actions[:limit]]
+
+    async def list_usage(self, business_id: str, since: datetime) -> list[ModelUsage]:
+        return [
+            _copy(u) for u in self._usage if u.business_id == business_id and u.at >= since
+        ]
 
     async def list_all_lessons(self, business_id: str) -> list[Lesson]:
         lessons = [
@@ -191,3 +198,6 @@ class InMemoryStore:
 
     async def get_action(self, action_id: str) -> AuditEntry | None:
         return _copy(self._actions.get(action_id))
+
+    async def log_usage(self, usage: ModelUsage) -> None:
+        self._usage.append(_copy(usage))

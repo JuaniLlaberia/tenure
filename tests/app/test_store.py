@@ -19,6 +19,7 @@ from contract import (
     AutonomyLevel,
     BusinessProfile,
     Lesson,
+    ModelUsage,
     PostSocial,
     SendEmail,
     Task,
@@ -364,3 +365,26 @@ async def test_state_items_round_trip_and_prune(store):
     assert [k for kd, k, _ in await store.list_state() if kd == kind] == ['["1", 2]']
     await store.prune_state(datetime.now(UTC) + timedelta(seconds=5))
     assert [k for kd, k, _ in await store.list_state() if kd == kind] == []
+
+async def test_usage_is_logged_and_listed_since_a_time(store):
+    business_id, (team_id,) = await business(store)
+
+    def usage(minutes, cost):
+        return ModelUsage(
+            usage_id=new_id(),
+            business_id=business_id,
+            team_id=team_id,
+            model="anthropic/claude-sonnet-5.5",
+            purpose="Reviews",
+            input_tokens=900,
+            output_tokens=140,
+            cost=cost,
+            at=NOW + timedelta(minutes=minutes),
+        )
+
+    await store.log_usage(usage(-60 * 24 * 8, 0.003))
+    await store.log_usage(usage(0, 0.0026))
+    await store.log_usage(usage(1, None))
+    rows = await store.list_usage(business_id, NOW - timedelta(days=7))
+    assert sorted((r.cost or 0) for r in rows) == [0, 0.0026]
+    assert all(r.output_tokens == 140 and r.purpose == "Reviews" for r in rows)

@@ -173,7 +173,7 @@ async def test_critic_prompt_contains_rules_lessons_and_draft(deps, jev, llm, ma
     for text in ["matches the business tone", "Sign posts as Juan", GOOD_POST.text]:
         assert text in prompt
     assert marketing.lead.instructions not in prompt
-    assert llm.calls[0].model == deps.settings.model_reflect
+    assert llm.calls[0].model == deps.settings.model_critic
 
 async def test_tokens_are_counted(deps, jev, llm, marketing):
     jev.input_tokens = 100
@@ -186,3 +186,12 @@ async def test_tokens_are_counted(deps, jev, llm, marketing):
     llm.structured_responses["CriticReport"] = {"issues": ["Too salesy"]}
     revised = await run_check(deps, marketing, "social_post", GOOD_POST, LESSONS)
     assert revised.tokens == 110
+
+async def test_critic_uses_its_own_model_and_leaves_reasoning_to_it(deps, llm, jev):
+    jev.answers["passes_check"] = 0.1
+    llm.structured_responses["CriticReport"] = {"issues": ["Too vague about the date"]}
+    template = deps.templates["marketing"]
+    await run_check(deps, template, "social_post", SocialPostOutput(text="Soon!"), [])
+    (call,) = [c for c in llm.calls if c.schema is CriticReport]
+    assert call.model == deps.settings.model_critic == "anthropic/claude-sonnet-5.5"
+    assert call.reasoning is None
