@@ -1,4 +1,4 @@
-# Brain ↔ App Contract (v0.3 draft)
+# Brain ↔ App Contract (v0.4 draft)
 
 This is the agreement between the agent brain (`src/brain/`, owner: Juan) and the app (`src/app/`, owner: Mark).
 If both sides respect it, each can be built and tested alone, and they plug together at merge points.
@@ -10,7 +10,13 @@ Both change together: a change to one without the other is a bug, and `tests/con
 
 ## 0. Changelog
 
-**v0.3 (Oct 8), proposed by Mark, needs Juan's OK**
+**v0.4 (Oct 9), proposed by Mark, needs Juan's OK**
+
+| # | Change | Why |
+| --- | --- | --- |
+| 1 | `ApprovalDecision` gains optional `edited_action`: the founder's whole version of the action, so an edit can also change an email's subject and recipient (§7) | The dashboard's review screen edits all fields of an email, not only the body |
+
+**v0.3 (Oct 8), proposed by Mark, agreed by Juan**
 
 | # | Change | Why |
 | --- | --- | --- |
@@ -253,6 +259,7 @@ The app maps Telegram topics to `team_id` (a topic's `message_thread_id` ↔ `te
 | `approval_id` | `str` | From `NeedsApproval` |
 | `decision` | `"approve" \| "edit" \| "reject"` | The founder's choice |
 | `edited_text` | `str \| None` | Required for `edit`: the new post text, or the new email body |
+| `edited_action` | `PlannedAction \| None` | Optional for `edit`: the founder's whole version of the action, same `tool` as the draft's. Set when more than the text changed (an email's `subject` or `to`); its text or body always equals `edited_text` |
 | `reason` | `str \| None` | Optional for `reject`; with a reason the team revises and learns |
 
 What each decision does (plain code in the brain, outside the graph):
@@ -260,7 +267,7 @@ What each decision does (plain code in the brain, outside the graph):
 | Decision | Effect |
 | --- | --- |
 | `approve` | Runs the planned action (if any), logs it, streak + 1, saves the draft as an approved example, may emit `PromotionOffer` |
-| `edit` | Runs the action with `edited_text`, streak → 0, reflects on the diff → `LessonLearned` |
+| `edit` | Runs `edited_action` if given, otherwise the planned action with `edited_text`; streak → 0, reflects on the diff → `LessonLearned` |
 | `reject` + `reason` | Streak → 0, reflects → `LessonLearned`, the task is revised once with the reason → new `NeedsApproval` with a new `approval_id` (if revisions are left) |
 | `reject`, no reason | Streak → 0, task → `REJECTED` |
 

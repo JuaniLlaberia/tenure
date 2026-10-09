@@ -3,6 +3,8 @@ from typing import Literal
 
 from pydantic import BaseModel
 
+from contract.models.actions import PlannedAction
+
 class IncomingMessage(BaseModel):
     business_id: str
     team_id: str | None
@@ -15,6 +17,7 @@ class ApprovalDecision(BaseModel):
     approval_id: str
     decision: Literal["approve", "edit", "reject"]
     edited_text: str | None = None
+    edited_action: PlannedAction | None = None
     reason: str | None = None
 
 class PromotionResponse(BaseModel):
