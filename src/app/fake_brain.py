@@ -10,8 +10,11 @@ import re
 from collections.abc import AsyncIterator, Callable
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
+from io import BytesIO
 from typing import Literal
 from uuid import uuid4
+
+from PIL import Image, ImageDraw
 
 from app.store.memory import InMemoryStore
 from contract import (
@@ -27,6 +30,8 @@ from contract import (
     Cadence,
     Error,
     Event,
+    FileKind,
+    FileRef,
     IncomingMessage,
     Lesson,
     LessonLearned,
@@ -62,7 +67,10 @@ EMAIL = re.compile(r"[\w.+-]+@[\w-]+(\.[\w-]+)+")
 POST_LIMIT = 300
 LADDER = list(AutonomyLevel)
 ACTS_ALONE = (AutonomyLevel.ACT_AND_REPORT, AutonomyLevel.AUTONOMOUS)
-CHIEF = Persona(name="Alex", role="Chief of staff")
+CHIEF = Persona(name="Alex", role="Chief of staff", avatar="company/alex.png")
+VOICE_TRANSCRIPT = "We launch our new coaching package on Friday, get the word out"
+WANTS_IMAGES = re.compile(r"\b(image|images|visual|picture|photo)s?\b", re.IGNORECASE)
+IMAGE_TASKS = ("social_post", "newsletter", "visual")
 BUSINESS_QUESTIONS = [
     "Hi! I'm Alex, your chief of staff. What's your business called?",
     "What do you sell?",
@@ -75,6 +83,7 @@ STEP_VERBS = {
     "researcher": "researching",
     "writer": "writing",
     "invoicer": "drafting the reminder",
+    "illustrator": "making the image",
 }
 POST_OPENERS = ["Big news:", "Quick update:", "Heads up:"]
 
@@ -111,10 +120,10 @@ TEMPLATES = {
         name="marketing",
         display_name="Marketing",
         description="Posts, newsletters and competitor checks in your voice",
-        lead=Persona(name="Maya", role="Marketing lead"),
+        lead=Persona(name="Maya", role="Marketing lead", avatar="marketing/maya.png"),
         specialists={
-            "writer": Persona(name="Leo", role="Writer"),
-            "researcher": Persona(name="Sam", role="Researcher"),
+            "writer": Persona(name="Leo", role="Writer", avatar="marketing/leo.png"),
+            "researcher": Persona(name="Sam", role="Researcher", avatar="marketing/sam.png"),
         },
         task_types={
             "social_post": FakeTaskType("Bluesky post", ["writer"], "post_social"),
@@ -138,12 +147,32 @@ TEMPLATES = {
         ],
         default_plan=["social_post", "newsletter"],
     ),
+    "design": FakeTemplate(
+        name="design",
+        display_name="Design",
+        description="Images for your posts, newsletters and announcements, in your brand's style",
+        lead=Persona(name="Iris", role="Design lead", avatar="design/iris.png"),
+        specialists={
+            "illustrator": Persona(name="Otto", role="Illustrator", avatar="design/otto.png"),
+        },
+        task_types={
+            "visual": FakeTaskType(
+                "Visual", ["illustrator"], None, max_level=AutonomyLevel.ACT_AND_REPORT
+            ),
+        },
+        onboarding=[
+            ("palette", "What are your brand colours?", []),
+            ("style", "What visual style fits you best?", ["Photo-real", "Illustration"]),
+            ("avoid", "Anything we should never show?", ["Nothing in particular"]),
+        ],
+        default_plan=["visual"],
+    ),
     "finance": FakeTemplate(
         name="finance",
         display_name="Finance",
         description="Friendly payment reminders so you never chase invoices",
-        lead=Persona(name="Rita", role="Finance lead"),
-        specialists={"invoicer": Persona(name="Ivo", role="Invoicer")},
+        lead=Persona(name="Rita", role="Finance lead", avatar="finance/rita.png"),
+        specialists={"invoicer": Persona(name="Ivo", role="Invoicer", avatar="finance/ivo.png")},
         task_types={
             "invoice_reminder": FakeTaskType(
                 "Payment reminder",
@@ -178,6 +207,18 @@ def _preview(action: PlannedAction) -> str:
 def _is_feedback(text: str) -> bool:
     lowered = f"{text.lower().strip()} "
     return any(marker in lowered for marker in FEEDBACK_MARKERS)
+
+def _sample_image(title: str) -> bytes:
+    """
+    A stand-in for a generated image: soft shapes in the dashboard's colours.
+    """
+    image = Image.new("RGB", (1024, 1024), (226, 236, 232))
+    draw = ImageDraw.Draw(image)
+    draw.rectangle((0, 560, 1024, 1024), fill=(47, 93, 80))
+    draw.ellipse((300 + len(title) % 200, 200, 620 + len(title) % 200, 520), fill=(168, 102, 11))
+    out = BytesIO()
+    image.save(out, "PNG")
+    return out.getvalue()
 
 def _next_level(level: AutonomyLevel, cap: AutonomyLevel) -> AutonomyLevel | None:
     index = LADDER.index(level)
@@ -226,6 +267,7 @@ class FakeBrain:
         self._onboarding: dict[str, list[str]] = {}
         self._threads: dict[str, _Thread] = {}
         self._schedules: dict[str, Schedule] = {}
+        self._media: dict[str, list[FileRef]] = {}
 
     def list_templates(self) -> list[TemplateInfo]:
         return [template.info() for template in TEMPLATES.values()]
@@ -316,22 +358,26 @@ class FakeBrain:
         if ctx is None:
             yield Error(team_id=msg.team_id, message="I don't know this team.", recoverable=False)
             return
-        text = msg.text.strip()
+        text, founder_images, notes = self._read_attachments(ctx, msg)
+        for note in notes:
+            yield note
+        if not text:
+            return
         if not ctx.team.onboarded:
             events = self._team_onboarding(ctx, msg)
         elif ctx.thread.pending_request is not None:
             request = f"{ctx.thread.pending_request}\n{text}"
             ctx.thread.pending_request = None
-            events = self._work(ctx, request)
+            events = self._work(ctx, request, founder_images)
         elif REPEAT.search(text):
             events = self._schedule(ctx, text)
         elif _is_feedback(text):
             events = self._learn_from_chat(ctx, msg)
-        elif len(text.split()) < 4:
+        elif len(text.split()) < 4 and not founder_images:
             ctx.thread.pending_request = text
             events = self._clarify(ctx)
         else:
-            events = self._work(ctx, text)
+            events = self._work(ctx, text, founder_images)
         async for event in events:
             yield event
 
@@ -501,6 +547,37 @@ class FakeBrain:
             text="Got it, I'll remember that from now on.",
         )
 
+    def _read_attachments(
+        self, ctx: _Ctx, msg: IncomingMessage
+    ) -> tuple[str, list[FileRef], list[Event]]:
+        """
+        Pretends to understand attachments: a voice note is the demo request, photos can go
+        into the drafts, and videos get a polite no.
+        """
+        text = msg.text.strip()
+        images = [f for f in msg.attachments if f.kind == FileKind.IMAGE]
+        notes: list[Event] = []
+        if any(f.kind == FileKind.AUDIO for f in msg.attachments):
+            notes.append(
+                Progress(
+                    team_id=ctx.team_id,
+                    persona=ctx.lead,
+                    status=f"{ctx.lead.name} is listening to your voice note…",
+                )
+            )
+            text = f"{text}\n{VOICE_TRANSCRIPT}".strip()
+        if any(f.kind == FileKind.VIDEO for f in msg.attachments):
+            notes.append(
+                Say(
+                    team_id=ctx.team_id,
+                    persona=ctx.lead,
+                    text="I can't watch videos yet; tell me what's in it.",
+                )
+            )
+        if images and not text:
+            text = "Post this photo"
+        return text, images, notes
+
     async def _schedule(self, ctx: _Ctx, text: str) -> AsyncIterator[Event]:
         every = REPEAT.search(text).group(1).lower()
         if every in WEEKDAYS:
@@ -533,7 +610,9 @@ class FakeBrain:
             return ["competitor_check"]
         return ctx.template.default_plan
 
-    async def _work(self, ctx: _Ctx, request: str) -> AsyncIterator[Event]:
+    async def _work(
+        self, ctx: _Ctx, request: str, founder_images: list[FileRef] | None = None
+    ) -> AsyncIterator[Event]:
         plan = self._plan(ctx, request)
         titles = ", ".join(ctx.template.task_types[task_type].title.lower() for task_type in plan)
         yield Say(team_id=ctx.team_id, persona=ctx.lead, text=f"On it. Plan: {titles}.")
@@ -555,6 +634,10 @@ class FakeBrain:
             )
             await self._store.save_task(task)
             tasks.append(task)
+            if task_type in IMAGE_TASKS:
+                self._media[task.task_id] = await self._images_for(
+                    task, request, founder_images or []
+                )
             for index, step in enumerate(spec.steps):
                 persona = ctx.template.specialists[step]
                 verb = STEP_VERBS.get(step, "working")
@@ -574,18 +657,41 @@ class FakeBrain:
         report = f"{waiting} draft(s) are waiting for your OK." if waiting else "All done."
         yield Say(team_id=ctx.team_id, persona=ctx.lead, text=report)
 
+    async def _images_for(
+        self, task: Task, request: str, founder_images: list[FileRef]
+    ) -> list[FileRef]:
+        """
+        The founder's photos, or a made-up sample image when the request asks for one or the
+        task is a visual. Needs tools that can store files.
+        """
+        if founder_images:
+            return founder_images[:4]
+        if self._tools is None or (task.task_type != "visual" and not WANTS_IMAGES.search(request)):
+            return []
+        ref = await self._tools.save_file(
+            task.business_id,
+            _sample_image(task.title),
+            "image/png",
+            alt_text=f"Sample image for {task.title}",
+        )
+        return [ref] if ref else []
+
     async def _draft(self, task: Task) -> tuple[str, PlannedAction | None]:
         name = await self._business_name(task.business_id)
         brief = task.brief
+        images = self._media.get(task.task_id, [])
         if task.task_type == "social_post":
             opener = POST_OPENERS[task.revisions % len(POST_OPENERS)]
-            action = PostSocial(text=_clip(f"{opener} {brief}", POST_LIMIT))
+            action = PostSocial(text=_clip(f"{opener} {brief}", POST_LIMIT), images=images)
         elif task.task_type == "newsletter":
             action = SendEmail(
                 to=await self._newsletter_address(task),
                 subject=f"News from {name}",
                 body=f"Hi there,\n\n{brief}\n\nReply if you have questions.\n\n{name}",
+                images=images,
             )
+        elif task.task_type == "visual":
+            return f"{task.title}: one image in your style.", None
         elif task.task_type == "invoice_reminder":
             action = SendEmail(
                 to="client@example.com",
@@ -609,12 +715,17 @@ class FakeBrain:
             if action is None:
                 await self._save_status(task, TaskStatus.DONE)
                 yield Say(
-                    team_id=task.team_id, task_id=task.task_id, persona=ctx.lead, text=preview
+                    team_id=task.team_id,
+                    task_id=task.task_id,
+                    persona=ctx.lead,
+                    text=preview,
+                    media=self._media.get(task.task_id, []),
                 )
             else:
                 yield await self._execute(task, action, approval_id=None)
             return
         planned_action = None if level == AutonomyLevel.DRAFT_ONLY else action
+        media = [] if planned_action is not None else self._media.get(task.task_id, [])
         approval = Approval(
             approval_id=_new_id(),
             business_id=task.business_id,
@@ -623,6 +734,7 @@ class FakeBrain:
             task_type=task.task_type,
             preview=preview,
             planned_action=planned_action,
+            media=media,
             check_confidence=round(0.9 - 0.05 * task.revisions, 2),
             created_at=self._clock(),
         )
@@ -636,6 +748,7 @@ class FakeBrain:
             persona=ctx.lead,
             preview=preview,
             planned_action=planned_action,
+            media=media,
             check_confidence=approval.check_confidence,
         )
 
@@ -660,9 +773,9 @@ class FakeBrain:
                 )
             return ActionResult(action_id=action_id, ok=True)
         if isinstance(action, PostSocial):
-            return await self._tools.post_social(task.business_id, action.text)
+            return await self._tools.post_social(task.business_id, action.text, action.images)
         return await self._tools.send_email(
-            task.business_id, action.to, action.subject, action.body
+            task.business_id, action.to, action.subject, action.body, action.images
         )
 
     async def _execute(
@@ -810,7 +923,8 @@ class FakeBrain:
         if edited_action is not None:
             yield await self._execute(task, edited_action, approval.approval_id)
         elif isinstance(action, PostSocial):
-            yield await self._execute(task, PostSocial(text=edited_text), approval.approval_id)
+            edited = action.model_copy(update={"text": edited_text})
+            yield await self._execute(task, edited, approval.approval_id)
         elif isinstance(action, SendEmail):
             edited = action.model_copy(update={"body": edited_text})
             yield await self._execute(task, edited, approval.approval_id)
