@@ -47,10 +47,17 @@ For every stage:
 | 7 | [Learning](./stage-7-learning.md) | 6 | done |
 | 8 | [Company graph (business onboarding)](./stage-8-company-graph.md) | 6 | done |
 | 9 | [CLI, Postgres checkpointer, end to end](./stage-9-cli-and-e2e.md) | 6–8 | done |
+| 10 | [Voice notes, photos and files in](./stage-10-attachments.md) | 9 | not started |
+| 11 | [Design team and image generation](./stage-11-design-team.md) | 10 | not started |
+| 12 | [Marketing and design on one campaign](./stage-12-campaign-visuals.md) | 11 | not started |
+| 13 | [Avatars](./stage-13-avatars.md) | 11 | not started |
+| 14 | [Schedules](./stage-14-schedules.md) | 9 | not started |
 
 Statuses: `not started` → `tests written` (red, waiting for review) → `tests approved` → `done`.
 
 Stages 3, 4 and 5 are independent of each other once 1 and 2 are done.
+
+**Stages 10–14 (contract v0.6, Oct 9)** come from the feature plan in [ROADMAP.md](../ROADMAP.md), which has the order, the time box and what the app builds alongside each stage. Build them in order 10 → 11 → 12, then 13 and 14; 14 doesn't depend on 10–13 and can move up if images slip. The API formats, model candidates and prices in each stage file were checked on OpenRouter on Oct 9, so there's no need to research them again; only the live tests each stage lists. Until the app side lands, develop against `FakeTools` and `InMemoryStore` (extended in stages 10 and 14) and the CLI.
 
 ## Decisions so far (Oct 8)
 
@@ -60,3 +67,5 @@ Stages 3, 4 and 5 are independent of each other once 1 and 2 are done.
 - Models: `deepseek/deepseek-v4-flash-0731` for every LLM role; Jev is `typesafe/jev-1.13` on OpenRouter's Decisions API (spec §9).
 - Tests are reviewed per stage, in chat. Juan approved the tests of stages 1–4 on Oct 8, reviewing them as they were written, and of stages 5–9 on Oct 9. All tests are now frozen.
 - Commits go to the `brain` branch (Juan OK'd committing on Oct 8). Push only when asked.
+- Contract v0.4, v0.5 and v0.6 agreed by Juan (Oct 9).
+- New settings for stages 10–11: `MODEL_MEDIA` (default `google/gemini-3.5-flash-lite`) and `MODEL_IMAGE` (picked by a live test; candidates in stage 11). No new brain dependencies: the Images API is plain `httpx` (Oct 9).

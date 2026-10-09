@@ -4,6 +4,7 @@ from contract.models.actions import AuditEntry
 from contract.models.autonomy import Trust
 from contract.models.business import BusinessProfile
 from contract.models.learning import Lesson
+from contract.models.schedules import Schedule
 from contract.models.tasks import Approval, Task
 from contract.models.team import Team
 from contract.models.usage import ModelUsage
@@ -35,3 +36,9 @@ class Store(Protocol):
     async def get_action(self, action_id: str) -> AuditEntry | None: ...
 
     async def log_usage(self, usage: ModelUsage) -> None: ...
+
+    async def save_schedule(self, schedule: Schedule) -> None: ...
+    async def get_schedule(self, schedule_id: str) -> Schedule | None: ...
+    async def list_schedules(
+        self, business_id: str, team_id: str | None = None
+    ) -> list[Schedule]: ...

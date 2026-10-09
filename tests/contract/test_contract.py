@@ -12,8 +12,12 @@ from contract import (
     Ask,
     AuditEntry,
     AutonomyLevel,
+    Cadence,
     Error,
     Event,
+    FileKind,
+    FileRef,
+    IncomingMessage,
     LessonLearned,
     NeedsApproval,
     OnboardingComplete,
@@ -23,16 +27,40 @@ from contract import (
     Progress,
     PromotionOffer,
     Say,
+    Schedule,
+    ScheduleSaved,
     SendEmail,
+    Task,
+    TaskStatus,
     TeamHired,
     Trust,
 )
 
 NOW = datetime(2026, 10, 8, 12, 30, tzinfo=UTC)
-MAYA = Persona(name="Maya", role="Marketing lead")
+MAYA = Persona(name="Maya", role="Marketing lead", avatar="marketing/maya.png")
+PHOTO = FileRef(
+    file_id="f1",
+    business_id="b1",
+    kind=FileKind.IMAGE,
+    mime_type="image/png",
+    size_bytes=812_000,
+    source="generated",
+    alt_text="A sunlit studio with the doors open",
+    created_at=NOW,
+)
+WEEKLY = Schedule(
+    schedule_id="s1",
+    business_id="b1",
+    team_id="t1",
+    title="Monday newsletter idea",
+    request="Research an interesting topic around the business and propose a newsletter",
+    cadence=Cadence(every="week", weekday=0, hour=9),
+    created_at=NOW,
+)
 
 EVENTS = [
     Say(team_id="t1", persona=MAYA, text="On it."),
+    Say(team_id="t1", persona=MAYA, text="Here it is.", media=[PHOTO]),
     Progress(team_id="t1", task_id="k1", persona=MAYA, status="Drafting the post"),
     Ask(team_id=None, persona=MAYA, question="Which channels?", quick_replies=["Bluesky"]),
     NeedsApproval(
@@ -42,7 +70,7 @@ EVENTS = [
         task_type="social_post",
         persona=MAYA,
         preview="We launch Friday!",
-        planned_action=PostSocial(text="We launch Friday!"),
+        planned_action=PostSocial(text="We launch Friday!", images=[PHOTO]),
         check_confidence=0.91,
     ),
     NeedsApproval(
@@ -53,6 +81,7 @@ EVENTS = [
         persona=MAYA,
         preview="Competitor summary",
         planned_action=None,
+        media=[PHOTO],
         check_confidence=0.8,
     ),
     ActionDone(
@@ -77,6 +106,7 @@ EVENTS = [
         lesson_id="l1", team_id="t1", persona=MAYA, text="No emojis", business_wide=False
     ),
     TeamHired(team_id="t1", template="marketing", display_name="Marketing", personas=[MAYA]),
+    ScheduleSaved(team_id="t1", persona=MAYA, schedule=WEEKLY),
     OnboardingComplete(scope="business", team_id=None),
     Error(team_id=None, message="Something went wrong", recoverable=True),
 ]
@@ -174,3 +204,52 @@ def test_edit_can_carry_the_whole_edited_action():
     assert isinstance(parsed.edited_action, SendEmail)
     plain = ApprovalDecision(business_id="b1", approval_id="a1", decision="edit", edited_text="x")
     assert plain.edited_action is None
+
+def test_new_fields_default_so_older_payloads_still_parse():
+    assert PostSocial(text="Hi").images == []
+    assert SendEmail(to="a@b.co", subject="Hi", body="Body").images == []
+    assert Persona(name="Maya", role="Marketing lead").avatar is None
+    message = IncomingMessage(
+        business_id="b1", team_id="t1", text="Hi", message_id="m1", sent_at=NOW
+    )
+    assert message.attachments == []
+
+def test_actions_carry_at_most_four_images():
+    with pytest.raises(ValidationError):
+        PostSocial(text="Hi", images=[PHOTO] * 5)
+
+def test_message_with_only_a_voice_note():
+    voice = FileRef(
+        file_id="f2",
+        business_id="b1",
+        kind=FileKind.AUDIO,
+        mime_type="audio/ogg",
+        source="founder",
+        created_at=NOW,
+    )
+    message = IncomingMessage(
+        business_id="b1", team_id=None, text="", message_id="m2", sent_at=NOW, attachments=[voice]
+    )
+    assert IncomingMessage.model_validate_json(message.model_dump_json()) == message
+
+def test_cadence_bounds():
+    with pytest.raises(ValidationError):
+        Cadence(every="week", weekday=7)
+    with pytest.raises(ValidationError):
+        Cadence(every="month", day=31)
+
+def test_task_remembers_its_schedule():
+    task = Task(
+        task_id="k1",
+        business_id="b1",
+        team_id="t1",
+        task_type="newsletter",
+        title="Monday newsletter idea",
+        brief="Pick a topic",
+        status=TaskStatus.PLANNED,
+        steps=["researcher", "writer"],
+        schedule_id="s1",
+        created_at=NOW,
+        updated_at=NOW,
+    )
+    assert Task.model_validate_json(task.model_dump_json()).schedule_id == "s1"

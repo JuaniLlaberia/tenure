@@ -3,15 +3,19 @@ from typing import Annotated, Literal
 
 from pydantic import BaseModel, Field
 
+from contract.models.files import FileRef
+
 class PostSocial(BaseModel):
     tool: Literal["post_social"] = "post_social"
     text: str = Field(max_length=300)
+    images: list[FileRef] = Field(default=[], max_length=4)
 
 class SendEmail(BaseModel):
     tool: Literal["send_email"] = "send_email"
     to: str
     subject: str
     body: str
+    images: list[FileRef] = Field(default=[], max_length=4)
 
 PlannedAction = Annotated[PostSocial | SendEmail, Field(discriminator="tool")]
 
