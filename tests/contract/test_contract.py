@@ -8,6 +8,7 @@ from contract import (
     ActionResult,
     ActionUndone,
     Approval,
+    ApprovalDecision,
     Ask,
     AuditEntry,
     AutonomyLevel,
@@ -159,3 +160,17 @@ def test_trust_needs_at_least_one_approval_to_promote():
             promote_after=0,
             updated_at=NOW,
         )
+
+def test_edit_can_carry_the_whole_edited_action():
+    decision = ApprovalDecision(
+        business_id="b1",
+        approval_id="a1",
+        decision="edit",
+        edited_text="New body",
+        edited_action=SendEmail(to="new@b.co", subject="New subject", body="New body"),
+    )
+    parsed = ApprovalDecision.model_validate_json(decision.model_dump_json())
+    assert parsed == decision
+    assert isinstance(parsed.edited_action, SendEmail)
+    plain = ApprovalDecision(business_id="b1", approval_id="a1", decision="edit", edited_text="x")
+    assert plain.edited_action is None
