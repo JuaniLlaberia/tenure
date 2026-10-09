@@ -15,6 +15,7 @@ Mode = Literal["audio", "image", "pdf", "text", "unsupported"]
 
 UNREADABLE = "couldn't open it"
 VIDEO_REPLY = "I can't watch videos yet; tell me what's in it."
+UNHEARD_REPLY = "I couldn't hear your voice note. Could you send it again, or type it?"
 TEXT_TYPES = ("application/json", "application/csv", "application/xml")
 AUDIO_FORMATS = {
     "ogg": "ogg",
@@ -162,6 +163,23 @@ def attachments_text(text: str, described: list[MediaText]) -> str:
         else:
             parts.append(block(item))
     return "\n\n".join(parts)
+
+def unheard(described: list[MediaText]) -> bool:
+    """
+    A voice note that couldn't be transcribed.
+    """
+    return any(mode(item.file) == "audio" and not item.text for item in described)
+
+def nothing_heard(text: str, described: list[MediaText]) -> bool:
+    """
+    No caption and only voice notes that couldn't be transcribed: nothing for the team to act
+    on, so the run doesn't start.
+    """
+    return (
+        not text.strip()
+        and bool(described)
+        and all(mode(item.file) == "audio" and not item.text for item in described)
+    )
 
 def photos(described: list[MediaText]) -> dict[str, FileRef]:
     """

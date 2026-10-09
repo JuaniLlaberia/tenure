@@ -24,13 +24,16 @@ from brain.helpers.jev import Jev, OpenRouterJev
 from brain.helpers.llm import LLM, OpenRouterLLM
 from brain.learning import learn
 from brain.media import (
+    UNHEARD_REPLY,
     VIDEO_REPLY,
     MediaText,
     attachments_text,
     describe,
+    nothing_heard,
     onboarding_answer,
     photos,
     status,
+    unheard,
 )
 from brain.prompts.lead import ABOUT_IMAGE
 from brain.templates.loader import load_templates, template_info
@@ -154,7 +157,7 @@ class TenureBrain:
         async for event in self._read(msg, lead, described):
             yield event
         text = attachments_text(msg.text, described)
-        if msg.attachments and not text:
+        if (msg.attachments and not text) or nothing_heard(msg.text, described):
             return
         snapshot = await self.team_graph.aget_state(self._config(team))
         if snapshot.interrupts:
@@ -169,7 +172,8 @@ class TenureBrain:
     ) -> AsyncIterator[Event]:
         """
         Turns each attachment into text before anything decides (Jev only reads text), with a
-        status line per file. Videos get one polite reply instead.
+        status line per file. Videos get one polite reply instead, and so does a voice note that
+        couldn't be heard.
         """
         videos = False
         for file in msg.attachments:
@@ -183,6 +187,8 @@ class TenureBrain:
                 found.append(described)
         if videos:
             yield Say(team_id=msg.team_id, persona=persona, text=VIDEO_REPLY)
+        if unheard(found):
+            yield Say(team_id=msg.team_id, persona=persona, text=UNHEARD_REPLY)
 
     async def _hire(self, business_id: str, template: str) -> AsyncIterator[Event]:
         hired: str | None = None
@@ -335,7 +341,7 @@ class TenureBrain:
         async for event in self._read(msg, CHIEF_OF_STAFF, described):
             yield event
         text = attachments_text(msg.text, described)
-        if msg.attachments and not text:
+        if (msg.attachments and not text) or nothing_heard(msg.text, described):
             return
         config = _thread(f"{msg.business_id}:company")
         snapshot = await self.company_graph.aget_state(config)

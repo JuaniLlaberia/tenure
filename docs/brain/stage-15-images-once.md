@@ -58,8 +58,12 @@ saw anything, and a text-only rejection threw a good image away.
 - `src/brain/media.py`: the media call no longer sends `reasoning=False`. Gemini 3.5 Flash Lite
   can't turn reasoning off, so OpenRouter answered 400 and every voice note, photo and PDF came
   through as "couldn't open it". Found live on Oct 9; `test_voice_note_becomes_the_request`
-  now checks it. `test_live_transcribes_a_telegram_voice_note` would have caught it, but it
-  skips without `tests/brain/fixtures/voice_note.ogg`.
+  now checks it, and `test_live_transcribes_a_telegram_voice_note` runs on a new fixture,
+  `tests/brain/fixtures/voice_note.ogg` (a synthesized Telegram-style Opus note about Friday).
+- `src/brain/brain.py`: a voice note that can't be heard gets a `Say` ("I couldn't hear your
+  voice note. Could you send it again, or type it?") instead of a silent "Got it!". With no
+  caption and nothing else readable, nothing runs (and in onboarding it isn't taken as an
+  answer). Tests: `test_an_unheard_voice_note_*` in `test_media.py`.
 
 ## Tests
 

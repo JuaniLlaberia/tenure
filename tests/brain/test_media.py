@@ -10,7 +10,7 @@ from brain.deps import Deps, Settings
 from brain.fakes import FakeTools, InMemoryStore
 from brain.helpers.jev import OpenRouterJev
 from brain.helpers.llm import Completion, OpenRouterLLM, Usage
-from brain.media import describe
+from brain.media import UNHEARD_REPLY, describe
 from brain.prompts.chief_of_staff import Extraction
 from brain.templates.loader import load_templates
 from brain.templates.registries import OUTPUTS, EmailOutput, SocialPostOutput
@@ -274,6 +274,61 @@ async def test_unreadable_file_does_not_stop_the_run(
     assert of(events, NeedsApproval)
     assert "[Photo f9: couldn't open it]" in triage_state(jev)
     assert media_calls(llm) == []
+
+def fail_media(llm):
+    """
+    The media model refuses every file, as OpenRouter did when reasoning was turned off.
+    """
+
+    def complete(messages):
+        if media_parts(messages):
+            raise RuntimeError("400 Bad Request")
+        return Completion(text="Done.")
+
+    llm.completions = complete
+
+async def test_an_unheard_voice_note_is_said_and_starts_nothing(
+    brain, collect, jev, llm, tools, script, team, message
+):
+    script()
+    fail_media(llm)
+    note = voice(tools)
+
+    events = await collect(brain.handle_message(with_files(message(team, ""), note)))
+
+    assert [e.text for e in of(events, Say)] == [UNHEARD_REPLY]
+    assert not of(events, NeedsApproval) and not of(events, Error)
+    assert not [questions for _, _, questions in jev.calls if "has_feedback" in questions]
+
+async def test_an_unheard_voice_note_with_a_caption_still_runs(
+    brain, collect, jev, llm, tools, script, team, message
+):
+    script()
+    fail_media(llm)
+    note = voice(tools)
+
+    events = await collect(
+        brain.handle_message(with_files(message(team, "Post about Friday"), note))
+    )
+
+    assert UNHEARD_REPLY in [e.text for e in of(events, Say)]
+    assert of(events, NeedsApproval)
+    assert "Post about Friday" in triage_state(jev)
+
+async def test_an_unheard_voice_note_in_onboarding_is_not_an_answer(
+    brain, collect, llm, tools
+):
+    fail_media(llm)
+    await collect(brain.start_onboarding("b1"))
+    note = voice(tools)
+    msg = IncomingMessage(
+        business_id="b1", team_id=None, text="", message_id="m1", sent_at=NOW, attachments=[note]
+    )
+
+    events = await collect(brain.handle_message(msg))
+
+    assert [e.text for e in of(events, Say)] == [UNHEARD_REPLY]
+    assert not [call for call in llm.calls if call.schema is Extraction]
 
 async def test_another_business_file_is_not_read(
     brain, collect, jev, llm, tools, script, team, message
