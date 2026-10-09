@@ -123,7 +123,7 @@ async def test_overview_after_onboarding(client, flows, chat, store):
         "Upcoming: Friday launch",
         "Newsletter to: list@example.com",
     }
-    assert [t["hired"] for t in data["templates"]] == [True, False]
+    assert [t["hired"] for t in data["templates"]] == [True, False, False]
     assert data["stats"]["waiting"] == 0
 
 async def test_drafts_show_and_approve_reaches_telegram(client, flows, chat, store):
@@ -203,7 +203,7 @@ async def test_hire_from_the_dashboard_creates_the_topic(client, flows, chat, st
     assert response.status_code == 200
     await flows.drain()
     assert "Finance" in chat.topics
-    assert [t["hired"] for t in (await overview(client, token))["templates"]] == [True, True]
+    assert [t["hired"] for t in (await overview(client, token))["templates"]] == [True, False, True]
     unknown = await client.post(f"/b/{token}/api/hire", json={"template": "sales"})
     assert unknown.status_code == 409
 

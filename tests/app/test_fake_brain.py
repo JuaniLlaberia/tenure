@@ -4,7 +4,9 @@ from uuid import uuid4
 import pytest
 
 from app.fake_brain import PROMOTION_STREAK, TOKENS_PER_STEP, FakeBrain
+from app.files import Files
 from app.store.memory import InMemoryStore
+from app.tools.real import RealTools
 from contract import (
     ActionDone,
     ActionUndone,
@@ -382,3 +384,48 @@ async def test_a_repeating_request_saves_a_schedule_that_runs_on_demand(brain):
 
     events = await collect(brain.run_schedule(BIZ, saved.schedule.schedule_id))
     assert of(events, NeedsApproval)
+
+@pytest.fixture
+def tooled(store: InMemoryStore, clock: Clock) -> FakeBrain:
+    return FakeBrain(store, tools=RealTools(files=Files(store, clock)), clock=clock)
+
+async def test_a_voice_note_runs_as_the_demo_request(tooled):
+    team_id = await hired_team(tooled)
+    voice = await Files(tooled._store).save(BIZ, b"OggS", "audio/ogg", source="founder")
+    note = msg("", team_id).model_copy(update={"attachments": [voice]})
+    events = await collect(tooled.handle_message(note))
+    assert "listening" in of(events, Progress)[0].status
+    assert len(of(events, NeedsApproval)) == 2
+
+async def test_founder_photos_go_into_the_post(tooled):
+    team_id = await hired_team(tooled)
+    photo = await Files(tooled._store).save(BIZ, b"jpg", "image/jpeg", source="founder")
+    events = await collect(
+        tooled.handle_message(
+            msg("Post this with a line about the studio", team_id).model_copy(
+                update={"attachments": [photo]}
+            )
+        )
+    )
+    post = of(events, NeedsApproval)[0]
+    assert post.planned_action.images == [photo] and post.media == []
+
+async def test_asking_for_an_image_makes_a_sample(tooled):
+    team_id = await hired_team(tooled)
+    events = await collect(tooled.handle_message(msg(f"{REQUEST}, with an image", team_id)))
+    post, email = of(events, NeedsApproval)
+    assert len(post.planned_action.images) == 1 and len(email.planned_action.images) == 1
+    image = post.planned_action.images[0]
+    assert image.source == "generated" and image.alt_text
+
+async def test_design_visual_is_a_draft_with_media(tooled):
+    team_id = await hired_team(tooled, "design")
+    request = msg("Make an image for our Friday launch", team_id)
+    events = await collect(tooled.handle_message(request))
+    (visual,) = of(events, NeedsApproval)
+    assert visual.task_type == "visual" and visual.planned_action is None
+    assert [f.kind for f in visual.media] == ["image"]
+
+def test_personas_have_avatars(brain):
+    for template in brain.list_templates():
+        assert all(persona.avatar for persona in template.personas)

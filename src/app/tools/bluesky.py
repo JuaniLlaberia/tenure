@@ -1,8 +1,9 @@
 import re
 from collections.abc import Callable
+from dataclasses import dataclass
 from typing import Any
 
-from atproto import AsyncClient, client_utils
+from atproto import AsyncClient, client_utils, models
 from atproto_client.exceptions import (
     BadRequestError,
     InvokeTimeoutError,
@@ -35,6 +36,13 @@ def rich_text(text: str) -> client_utils.TextBuilder:
 
 def post_url(handle: str, uri: str) -> str:
     return f"https://bsky.app/profile/{handle}/post/{uri.rsplit('/', 1)[-1]}"
+
+@dataclass(frozen=True)
+class Image:
+    data: bytes
+    alt: str
+    width: int
+    height: int
 
 class Bluesky:
     """
@@ -74,11 +82,25 @@ class Bluesky:
         self._client = None
         return await action(await self._signed_in())
 
-    async def post(self, text: str) -> tuple[str, str]:
+    async def post(self, text: str, images: list[Image] | None = None) -> tuple[str, str]:
         """
-        Posts and returns (post URI, public URL).
+        Posts, with up to 4 images already under Bluesky's size limit, and returns
+        (post URI, public URL).
         """
-        response = await self._call(lambda client: client.send_post(rich_text(text)))
+        if images:
+            response = await self._call(
+                lambda client: client.send_images(
+                    rich_text(text),
+                    images=[image.data for image in images],
+                    image_alts=[image.alt for image in images],
+                    image_aspect_ratios=[
+                        models.AppBskyEmbedDefs.AspectRatio(width=image.width, height=image.height)
+                        for image in images
+                    ],
+                )
+            )
+        else:
+            response = await self._call(lambda client: client.send_post(rich_text(text)))
         return response.uri, post_url(self.handle, response.uri)
 
     async def delete(self, uri: str) -> None:

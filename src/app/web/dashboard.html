@@ -75,15 +75,43 @@ h1, h2, h3 { font-family: var(--font-display); margin: 0; text-wrap: balance; }
 td .id { display: block; font-family: var(--font-mono); font-size: 11.5px; color: var(--muted); overflow-wrap: anywhere; }
 tr.total td { border-top: 2px solid var(--line); font-weight: 600; }
 
-.strip { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 22px; background: var(--surface); border: 1px solid var(--line); border-radius: 12px; padding: 12px 16px; }
-.attn { display: inline-flex; align-items: center; gap: 8px; background: var(--wait-soft); color: var(--wait); border-radius: 999px; padding: 4px 12px; font-weight: 600; font-size: 13.5px; }
-.attn.clear { background: var(--ok-soft); color: var(--ok); }
-.stat { display: flex; align-items: baseline; gap: 6px; font-size: 13px; color: var(--muted); }
-.stat b { font-family: var(--font-display); font-size: 19px; color: var(--ink); font-weight: 700; font-variant-numeric: tabular-nums; }
-
-.board { display: grid; grid-template-columns: minmax(0, 1fr); gap: 20px; }
-@media (min-width: 1000px) { .board { grid-template-columns: minmax(0, 1.65fr) minmax(0, 1fr); align-items: start; } }
-.col { display: grid; gap: 20px; min-width: 0; }
+.nav { display: flex; gap: 2px; overflow-x: auto; border-bottom: 1px solid var(--line); margin-top: -20px; scrollbar-width: none; }
+.nav::-webkit-scrollbar { display: none; }
+.navtab { border: 0; background: none; padding: 11px 12px 10px; font-weight: 500; color: var(--muted); border-bottom: 2px solid transparent; white-space: nowrap; display: inline-flex; gap: 6px; align-items: center; }
+.navtab:hover { color: var(--ink); }
+.navtab[aria-selected="true"] { color: var(--ink); border-bottom-color: var(--accent); }
+.navtab:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
+.count { background: var(--wait-soft); color: var(--wait); border-radius: 999px; font-size: 11.5px; padding: 0 7px; font-weight: 600; font-variant-numeric: tabular-nums; }
+.page, .stack { display: grid; gap: 20px; min-width: 0; }
+.home-grid { display: grid; grid-template-columns: minmax(0, 1fr); gap: 20px; align-items: start; }
+@media (min-width: 860px) { .home-grid { grid-template-columns: minmax(0, 1.3fr) minmax(0, 1fr); } }
+.panel-head .more { margin-left: auto; color: var(--accent); font-size: 13px; font-weight: 500; text-decoration: none; }
+.panel-head .more:hover { text-decoration: underline; }
+.needs { display: grid; gap: 8px; }
+.need { display: flex; gap: 12px; align-items: center; padding: 10px 12px; border: 1px solid var(--line); border-radius: 10px; min-width: 0; }
+.need .txt { min-width: 0; display: grid; }
+.need .txt b { font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.need .go { margin-left: auto; flex: none; }
+.nums { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 10px; }
+.stat { display: grid; gap: 2px; min-width: 0; }
+.stat b { font-family: var(--font-display); font-size: 26px; font-weight: 700; font-variant-numeric: tabular-nums; line-height: 1.2; }
+.feed { display: grid; gap: 10px; margin: 0; padding: 0; list-style: none; }
+.feed li { display: flex; gap: 10px; align-items: center; font-size: 13.5px; min-width: 0; }
+.feed li > div { min-width: 0; overflow-wrap: anywhere; }
+.feed .when { color: var(--muted); font-size: 12px; }
+.thumb { width: 44px; height: 44px; border-radius: 8px; flex: none; object-fit: cover; background: var(--sunk); display: block; }
+.thumb.sm { width: 32px; height: 32px; border-radius: 6px; }
+.dot { width: 32px; height: 32px; border-radius: 6px; flex: none; background: var(--accent-soft); color: var(--accent); display: grid; place-items: center; font-size: 15px; }
+.imgs { display: grid; grid-template-columns: repeat(auto-fill, minmax(130px, 1fr)); gap: 10px; }
+.imgcard { border: 1px solid var(--line); border-radius: 10px; overflow: hidden; display: grid; background: var(--surface); min-width: 0; }
+.imgcard img { width: 100%; aspect-ratio: 1; object-fit: cover; display: block; background: var(--sunk); border-bottom: 1px solid var(--line); }
+.imgcard .foot { padding: 7px 8px; display: grid; gap: 6px; font-size: 12px; color: var(--muted); }
+.imgcard .foot span { overflow-wrap: anywhere; }
+.imgcard.removed img { opacity: 0.3; }
+.imgcard.removed .foot span { text-decoration: line-through; }
+#schedules, #spend, #log, #lessons, #teams { min-width: 0; }
+.sched-what b { display: block; font-weight: 600; }
+.sched-actions { display: flex; flex-wrap: wrap; gap: 6px; justify-content: flex-end; }
 .panel { background: var(--surface); border: 1px solid var(--line); border-radius: 12px; padding: 16px 18px; display: grid; gap: 14px; min-width: 0; }
 .panel-head { display: flex; flex-wrap: wrap; align-items: baseline; gap: 6px 12px; }
 .panel-head h2 { font-size: 17px; font-weight: 700; }
@@ -96,7 +124,11 @@ tr.total td { border-top: 2px solid var(--line); font-weight: 600; }
 .team-head h3 { font-size: 16px; }
 .people { display: flex; flex-wrap: wrap; gap: 6px 14px; }
 .person { display: flex; align-items: center; gap: 8px; font-size: 13.5px; }
-.ava { width: 30px; height: 30px; border-radius: 50%; display: grid; place-items: center; font-weight: 600; font-size: 12.5px; color: var(--accent-ink); background: var(--accent); flex: none; }
+.ava { position: relative; overflow: hidden; width: 30px; height: 30px; border-radius: 50%; display: grid; place-items: center; font-weight: 600; font-size: 12.5px; color: var(--accent-ink); background: var(--accent); flex: none; }
+.ava img { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; }
+.ava.lg { width: 44px; height: 44px; font-size: 16px; border-radius: 8px; }
+.ava.sm { width: 22px; height: 22px; font-size: 10.5px; }
+.ava.all { background: var(--auto-soft); color: var(--auto); }
 .ava.s1 { background: var(--auto); }
 .ava.s2 { background: var(--wait); }
 .person small { color: var(--muted); display: block; font-size: 12px; line-height: 1.2; }
@@ -139,13 +171,16 @@ td.num, th.num { text-align: right; font-family: var(--font-mono); font-variant-
 td small { color: var(--muted); }
 tr:last-child td { border-bottom: 0; }
 
-.lesson { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 4px 10px; padding: 9px 0; border-bottom: 1px solid var(--line); align-items: start; }
+.lesson { display: grid; grid-template-columns: 22px minmax(0, 1fr) auto; gap: 4px 10px; padding: 9px 0; border-bottom: 1px solid var(--line); align-items: start; }
+.lesson .ava { margin-top: 1px; }
 .lesson:last-child { border-bottom: 0; }
 .lesson p { margin: 0; font-weight: 500; overflow-wrap: anywhere; }
-.lesson .meta { grid-column: 1; display: flex; flex-wrap: wrap; gap: 4px 8px; font-size: 12px; color: var(--muted); }
+.lesson .meta { grid-column: 2; display: flex; flex-wrap: wrap; gap: 4px 8px; font-size: 12px; color: var(--muted); }
 .lesson .meta .all { color: var(--auto); font-weight: 600; }
 
 .entry { display: grid; grid-template-columns: 64px minmax(0, 1fr) auto; gap: 10px; padding: 9px 0; border-bottom: 1px solid var(--line); }
+.entry .pics { display: flex; gap: 4px; margin-top: 2px; }
+.tpl .people { gap: 6px; }
 .entry:last-child { border-bottom: 0; }
 .entry time { font-family: var(--font-mono); font-size: 12px; color: var(--muted); padding-top: 2px; }
 .entry .what { display: grid; gap: 3px; min-width: 0; }
@@ -172,7 +207,9 @@ kbd { font-family: var(--font-mono); font-size: 11.5px; border: 1px solid var(--
 .inbox { display: grid; grid-template-columns: minmax(0, 1fr); gap: 14px; }
 @media (min-width: 920px) { .inbox { grid-template-columns: 300px minmax(0, 1fr); align-items: start; } }
 .list { display: grid; gap: 6px; align-content: start; }
-.item { text-align: left; border: 1px solid var(--line); border-radius: 10px; padding: 10px 12px; background: var(--surface); display: grid; gap: 4px; width: 100%; }
+.item { text-align: left; border: 1px solid var(--line); border-radius: 10px; padding: 10px 12px; background: var(--surface); display: grid; grid-template-columns: minmax(0, 1fr); gap: 4px; width: 100%; }
+.item.pic { grid-template-columns: 44px minmax(0, 1fr); column-gap: 10px; }
+.item.pic .thumb { grid-row: span 2; }
 .item:hover { border-color: var(--muted); }
 .item.sel { border-color: var(--accent); box-shadow: inset 3px 0 0 var(--accent); background: var(--accent-soft); }
 .item .t { font-weight: 600; overflow-wrap: anywhere; }
@@ -260,50 +297,91 @@ kbd { font-family: var(--font-mono); font-size: 11.5px; border: 1px solid var(--
     <button class="btn quiet" id="logout" type="button">Log out</button>
   </header>
 
-  <section class="strip" aria-label="Summary" id="strip"></section>
+  <nav class="nav" role="tablist" aria-label="Dashboard" id="nav">
+    <button class="navtab" role="tab" id="t-home" aria-controls="p-home" data-page="home" type="button">Home</button>
+    <button class="navtab" role="tab" id="t-drafts" aria-controls="p-drafts" data-page="drafts" type="button">Drafts <span class="count" id="drafts-count" hidden></span></button>
+    <button class="navtab" role="tab" id="t-teams" aria-controls="p-teams" data-page="teams" type="button">Teams</button>
+    <button class="navtab" role="tab" id="t-schedules" aria-controls="p-schedules" data-page="schedules" type="button">Schedules</button>
+    <button class="navtab" role="tab" id="t-knowledge" aria-controls="p-knowledge" data-page="knowledge" type="button">Knowledge</button>
+    <button class="navtab" role="tab" id="t-activity" aria-controls="p-activity" data-page="activity" type="button">Activity</button>
+    <button class="navtab" role="tab" id="t-spend" aria-controls="p-spend" data-page="spend" type="button">Spend</button>
+  </nav>
 
-  <section class="panel" aria-label="Waiting for you">
-    <div class="panel-head">
-      <h2>Waiting for you</h2>
-      <span class="sub" id="waiting-sub"></span>
-      <span class="keys"><span><kbd>A</kbd> approve</span><span><kbd>E</kbd> edit</span><span><kbd>R</kbd> reject</span><span><kbd>J</kbd>/<kbd>K</kbd> next, previous</span><span><kbd>Esc</kbd> leave the editor</span></span>
+  <div class="page" role="tabpanel" id="p-home" aria-labelledby="t-home">
+    <div class="home-grid">
+      <section class="panel" aria-label="Needs you">
+        <div class="panel-head"><h2>Needs you</h2><a class="more" href="#drafts">All drafts →</a></div>
+        <div class="needs" id="needs"></div>
+      </section>
+      <div class="stack">
+        <section class="panel" aria-label="This week">
+          <div class="panel-head"><h2>This week</h2><a class="more" href="#spend">Spend →</a></div>
+          <div class="nums" id="week"></div>
+        </section>
+        <section class="panel" aria-label="Latest">
+          <div class="panel-head"><h2>Latest</h2><a class="more" href="#activity">Activity →</a></div>
+          <ul class="feed" id="latest"></ul>
+        </section>
+      </div>
     </div>
-    <div class="inbox" id="inbox">
-      <div class="list" id="list" role="listbox" aria-label="Drafts"></div>
-      <div id="review"></div>
-    </div>
-  </section>
+  </div>
 
-  <div class="board">
-    <div class="col">
-      <section class="panel" aria-label="Teams">
-        <div class="panel-head"><h2>Teams</h2><span class="sub">Trust is earned per kind of task</span></div>
-        <div id="teams"></div>
-      </section>
-      <section class="panel" aria-label="Tasks">
-        <div class="panel-head"><h2>Tasks</h2><span class="sub">Newest first</span></div>
-        <div class="table-wrap">
-          <table>
-            <thead><tr><th>Task</th><th>Type</th><th>Status</th><th class="num">Revisions</th><th class="num">Tokens</th><th class="num">Updated</th></tr></thead>
-            <tbody id="tasks"></tbody>
-          </table>
-        </div>
-      </section>
-      <section class="panel" aria-label="Model spend this week">
-        <div class="panel-head"><h2>Model spend this week</h2><span class="sub">Every model call, with what OpenRouter billed</span></div>
-        <div id="spend"></div>
-      </section>
-    </div>
-    <div class="col">
-      <section class="panel" aria-label="What your team knows">
-        <div class="panel-head"><h2 id="lessons-title">What your teams know about you</h2><span class="sub">Used in every draft and check</span></div>
-        <div id="lessons"></div>
-      </section>
-      <section class="panel" aria-label="Activity">
-        <div class="panel-head"><h2>Activity</h2><span class="sub">Every real action, as logged</span></div>
-        <div id="log"></div>
-      </section>
-    </div>
+  <div class="page" role="tabpanel" id="p-drafts" aria-labelledby="t-drafts" hidden>
+    <section class="panel" aria-label="Waiting for you">
+      <div class="panel-head">
+        <h2>Waiting for you</h2>
+        <span class="sub" id="waiting-sub"></span>
+        <span class="keys"><span><kbd>A</kbd> approve</span><span><kbd>E</kbd> edit</span><span><kbd>R</kbd> reject</span><span><kbd>J</kbd>/<kbd>K</kbd> next, previous</span><span><kbd>Esc</kbd> leave the editor</span></span>
+      </div>
+      <div class="inbox" id="inbox">
+        <div class="list" id="list" role="listbox" aria-label="Drafts"></div>
+        <div id="review"></div>
+      </div>
+    </section>
+  </div>
+
+  <div class="page" role="tabpanel" id="p-teams" aria-labelledby="t-teams" hidden>
+    <section class="panel" aria-label="Teams">
+      <div class="panel-head"><h2>Teams</h2><span class="sub">Trust is earned per kind of task</span></div>
+      <div id="teams"></div>
+    </section>
+  </div>
+
+  <div class="page" role="tabpanel" id="p-schedules" aria-labelledby="t-schedules" hidden>
+    <section class="panel" aria-label="Schedules">
+      <div class="panel-head"><h2>Schedules</h2><span class="sub">Requests your teams repeat on their own. Drafts still wait for your OK unless the task has earned more trust.</span></div>
+      <div id="schedules"></div>
+    </section>
+  </div>
+
+  <div class="page" role="tabpanel" id="p-knowledge" aria-labelledby="t-knowledge" hidden>
+    <section class="panel" aria-label="What your team knows">
+      <div class="panel-head"><h2 id="lessons-title">What your teams know about you</h2><span class="sub">Used in every draft and check</span></div>
+      <div id="lessons"></div>
+    </section>
+  </div>
+
+  <div class="page" role="tabpanel" id="p-activity" aria-labelledby="t-activity" hidden>
+    <section class="panel" aria-label="Activity">
+      <div class="panel-head"><h2>Activity</h2><span class="sub">Every real action, as logged</span></div>
+      <div id="log"></div>
+    </section>
+    <section class="panel" aria-label="Tasks">
+      <div class="panel-head"><h2>Tasks</h2><span class="sub">Newest first</span></div>
+      <div class="table-wrap">
+        <table>
+          <thead><tr><th>Task</th><th>Type</th><th>Status</th><th class="num">Revisions</th><th class="num">Tokens</th><th class="num">Updated</th></tr></thead>
+          <tbody id="tasks"></tbody>
+        </table>
+      </div>
+    </section>
+  </div>
+
+  <div class="page" role="tabpanel" id="p-spend" aria-labelledby="t-spend" hidden>
+    <section class="panel" aria-label="Model spend this week">
+      <div class="panel-head"><h2>Model spend this week</h2><span class="sub">Every model call, with what OpenRouter billed</span></div>
+      <div id="spend"></div>
+    </section>
   </div>
 </div>
 
@@ -321,9 +399,10 @@ const API = `/b/${TOKEN}/api`;
 const REFRESH_MS = 5000;
 const REASONS = ["Too salesy", "Wrong tone", "Facts are wrong", "Too long", "Not the right time"];
 const POST_LIMIT = 300;
+const PAGES = ["home", "drafts", "teams", "schedules", "knowledge", "activity", "spend"];
 const ui = {
   lowering: null, busy: new Map(), selected: null, tab: "view", edits: {}, mail: {},
-  rejecting: null, picked: new Set(), reason: {},
+  rejecting: null, picked: new Set(), reason: {}, removed: {}, page: "home",
 };
 let data = null;
 let clockOffset = 0;
@@ -334,6 +413,17 @@ const $ = (id) => document.getElementById(id);
 const esc = (s) => String(s ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[c]);
 const fmtNum = (n) => Number(n).toLocaleString("en-US");
 const fmtTokens = (n) => (n >= 1000 ? `${(n / 1000).toFixed(1)}k` : String(n));
+const fileUrl = (id, thumb = true) => `${API}/files/${encodeURIComponent(id)}${thumb ? "?thumb=1" : ""}`;
+const thumbImg = (image, cls = "thumb") => `<img class="${cls}" src="${fileUrl(image.file_id)}" alt="${esc(image.alt)}" loading="lazy">`;
+function avatar(person, i = 0, cls = "") {
+  if (!person) return `<span class="ava all ${cls}" aria-hidden="true">All</span>`;
+  const img = person.avatar ? `<img src="${esc(person.avatar)}" alt="" onerror="this.remove()">` : "";
+  return `<span class="ava s${i % 3} ${cls}" aria-hidden="true">${esc((person.name || "?")[0])}${img}</span>`;
+}
+function fmtWhen(iso) {
+  if (!iso) return "–";
+  return new Date(iso).toLocaleString([], { weekday: "short", month: "short", day: "numeric", hour: "numeric", minute: "2-digit" });
+}
 
 function fmtTime(iso) {
   const d = new Date(iso);
@@ -380,7 +470,7 @@ async function act(key, path, body, doing = {}) {
     ok = true;
     ui.lowering = null;
     if (key === ui.rejecting) { ui.rejecting = null; ui.picked.clear(); }
-    if (key in ui.edits || key in ui.mail) { delete ui.edits[key]; delete ui.mail[key]; }
+    if (key in ui.edits || key in ui.mail || key in ui.removed) { delete ui.edits[key]; delete ui.mail[key]; delete ui.removed[key]; }
     if (key === ui.selected) { ui.tab = "view"; ui.selected = null; }
   } catch (error) {
     toast(error.message, true);
@@ -407,17 +497,30 @@ function tickSlow() {
   if (el) el.textContent = slowText(el.dataset.key);
 }
 
-function renderStrip() {
+function renderHome() {
+  const drafts = data.drafts;
+  $("drafts-count").hidden = !drafts.length;
+  $("drafts-count").textContent = drafts.length;
+  $("needs").innerHTML = drafts.length ? drafts.slice(0, 4).map((d) => {
+    const pic = d.images.length ? thumbImg(d.images[0]) : avatar({ name: d.lead, avatar: d.lead_avatar }, 0, "lg");
+    const images = d.images.length ? ` · ${d.images.length} image${d.images.length > 1 ? "s" : ""}` : "";
+    return `
+      <div class="need">${pic}
+        <div class="txt"><b>${esc(d.type)} · ${esc(d.title)}</b><span class="sub">${esc(d.lead)}${images} · check ${d.check}%</span></div>
+        <button class="btn small go ${d === drafts[0] ? "primary" : ""}" type="button" data-review="${esc(d.approval_id)}">Review</button>
+      </div>`;
+  }).join("") + (drafts.length > 4 ? `<a class="sub" href="#drafts">${drafts.length - 4} more in Drafts</a>` : "")
+    : `<p class="empty">Nothing needs you right now. New drafts show up here and in Telegram.</p>`;
   const s = data.stats;
-  const waiting = s.waiting
-    ? `<span class="attn">${s.waiting} draft${s.waiting > 1 ? "s" : ""} waiting for you</span>`
-    : `<span class="attn clear">Nothing waiting for you</span>`;
-  const rate = s.clean_rate === null ? "–" : `${s.clean_rate}%`;
-  $("strip").innerHTML = `${waiting}
-    <span class="stat"><b>${s.done_week}</b> tasks done this week</span>
-    <span class="stat"><b>${s.actions_week}</b> real actions</span>
-    <span class="stat"><b>${rate}</b> approved without edits</span>
-    <span class="stat"><b class="mono">${fmtTokens(s.tokens_week)}</b> tokens${s.billed_week === null ? "" : ` · <b class="mono">$${s.billed_week.toFixed(s.billed_week < 1 ? 3 : 2)}</b> billed`}${s.unbilled_week ? ` · ${s.unbilled_week} call${s.unbilled_week > 1 ? "s" : ""} without a cost` : ""}</span>`;
+  $("week").innerHTML = `
+    <div class="stat"><b>${s.done_week}</b><span class="sub">tasks done</span></div>
+    <div class="stat"><b>${s.actions_week}</b><span class="sub">posts and emails out</span></div>
+    <div class="stat"><b class="mono">${s.billed_week === null ? "–" : `$${s.billed_week.toFixed(2)}`}</b><span class="sub">models billed</span></div>`;
+  const latest = data.activity.slice(0, 3);
+  $("latest").innerHTML = latest.length ? latest.map((a) => `
+    <li>${a.images.length ? thumbImg(a.images[0], "thumb sm") : `<span class="dot" aria-hidden="true">${a.ok ? "✓" : "!"}</span>`}
+      <div>${esc(a.summary)}${a.images.length ? ` · ${a.images.length} image${a.images.length > 1 ? "s" : ""}` : ""}<div class="when">${esc(fmtTime(a.at))} · ${a.autonomous ? "on its own" : "approved by you"}</div></div></li>`).join("")
+    : `<li class="empty">Nothing went out yet this week.</li>`;
 }
 
 function renderTeams() {
@@ -442,7 +545,7 @@ function renderTeams() {
       <div class="team-head">
         <h3>${esc(team.name)} <span class="badge">hired ${esc(fmtTime(team.hired_at))}</span>${team.onboarded ? "" : ' <span class="badge">getting to know you</span>'}</h3>
         <div class="people">${team.people.map((p, i) => `
-          <div class="person"><span class="ava s${i % 3}">${esc(p.name[0])}</span><div>${esc(p.name)}<small>${esc(p.role)}</small></div></div>`).join("")}</div>
+          <div class="person">${avatar(p, i)}<div>${esc(p.name)}<small>${esc(p.role)}</small></div></div>`).join("")}</div>
       </div>
       <div class="trust">${team.trust.map((t) => trustRow(team, t)).join("")}</div>
       ${threshold(team)}
@@ -510,11 +613,14 @@ const draftById = (id) => data.drafts.find((d) => d.approval_id === id);
 const currentDraft = () => (ui.selected ? draftById(ui.selected) : null);
 const textOf = (d) => ui.edits[d.approval_id] ?? d.text ?? "";
 const mailOf = (d) => ({ to: d.to, subject: d.subject, ...(ui.mail[d.approval_id] || {}) });
+const removedOf = (d) => ui.removed[d.approval_id] || new Set();
+const keptImages = (d) => d.images.filter((image) => !removedOf(d).has(image.file_id));
 function changed(d) {
-  if (d.kind === "post") return textOf(d) !== d.text;
+  const images = removedOf(d).size > 0;
+  if (d.kind === "post") return images || textOf(d) !== d.text;
   if (d.kind === "email") {
     const mail = mailOf(d);
-    return textOf(d) !== d.text || mail.to !== d.to || mail.subject !== d.subject;
+    return images || textOf(d) !== d.text || mail.to !== d.to || mail.subject !== d.subject;
   }
   return false;
 }
@@ -534,8 +640,8 @@ function renderInbox(force = false) {
   const drafts = data.drafts;
   $("waiting-sub").textContent = drafts.length ? `${drafts.length} draft${drafts.length > 1 ? "s" : ""} · decide here or in Telegram` : "";
   if (ui.selected && !draftById(ui.selected)) {
-    if (ui.edits[ui.selected] !== undefined || ui.mail[ui.selected]) toast("That draft was handled in Telegram, so your changes weren't used.", true);
-    delete ui.edits[ui.selected]; delete ui.mail[ui.selected];
+    if (ui.edits[ui.selected] !== undefined || ui.mail[ui.selected] || ui.removed[ui.selected]) toast("That draft was handled in Telegram, so your changes weren't used.", true);
+    delete ui.edits[ui.selected]; delete ui.mail[ui.selected]; delete ui.removed[ui.selected];
     ui.selected = null; ui.tab = "view"; ui.rejecting = null;
   }
   if (!ui.selected && drafts.length) ui.selected = drafts[0].approval_id;
@@ -546,10 +652,11 @@ function renderInbox(force = false) {
     return;
   }
   $("list").innerHTML = drafts.map((d) => `
-    <button class="item ${d.approval_id === ui.selected ? "sel" : ""}" type="button" role="option" aria-selected="${d.approval_id === ui.selected}" data-pick="${esc(d.approval_id)}">
+    <button class="item ${d.images.length ? "pic" : ""} ${d.approval_id === ui.selected ? "sel" : ""}" type="button" role="option" aria-selected="${d.approval_id === ui.selected}" data-pick="${esc(d.approval_id)}">
+      ${d.images.length ? thumbImg(d.images[0]) : ""}
       <span class="t">${esc(d.title)}</span>
       <span class="meta">
-        <span>${esc(d.type)} · ${esc(d.team)}</span>
+        <span>${esc(d.type)} · ${esc(d.team)}${d.images.length ? ` · ${d.images.length} image${d.images.length > 1 ? "s" : ""}` : ""}</span>
         <span class="mono">check ${d.check}%</span>
         ${d.revision ? `<span class="pill neutral">Revision ${d.revision} of 2</span>` : ""}
         ${ui.busy.has(d.approval_id) ? `<span class="pill in_progress">${busyLabel(d.approval_id, ui.busy.get(d.approval_id).kind, "")}</span>` : changed(d) ? `<span class="pill wait">Edited</span>` : `<span>${esc(fmtTime(d.created_at))}</span>`}
@@ -595,13 +702,26 @@ function renderReview() {
       ${showDiff ? `<button class="tab ${ui.tab === "diff" ? "on" : ""}" role="tab" data-tab="diff" type="button">Your changes</button>` : ""}
     </div>` : "";
   const body = ui.tab === "edit" ? editor : ui.tab === "diff" ? `<div class="diff">${diff(d.text, text)}</div>` : preview;
+  const removable = editable && d.images.length > 0;
+  const where = d.kind === "email" ? "the first is the header, the rest go below the text" : d.kind === "post" ? "posted in this order" : "nothing gets posted";
+  const images = d.images.length ? `
+    <div class="label">Images · ${where}</div>
+    <div class="imgs">${d.images.map((image) => {
+      const gone = removedOf(d).has(image.file_id);
+      const button = removable
+        ? `<button class="btn small ${gone ? "" : "danger"}" type="button" data-act="img-toggle" data-file="${esc(image.file_id)}" ${busy}>${gone ? "Put back" : "Remove"}</button>`
+        : "";
+      return `<div class="imgcard ${gone ? "removed" : ""}"><a href="${fileUrl(image.file_id, false)}" target="_blank" rel="noopener"><img src="${fileUrl(image.file_id)}" alt="${esc(image.alt)}" loading="lazy"></a><div class="foot"><span>${esc(image.alt || "No description")}</span>${button}</div></div>`;
+    }).join("")}</div>` : "";
   const rules = d.rules.length ? `
     <details class="rules"><summary>${esc(d.lead)} followed ${d.rules.length} rule${d.rules.length > 1 ? "s" : ""} for this</summary>
       <div class="chips">${d.rules.map((r) => `<span class="chip rule">${esc(r)}</span>`).join("")}</div></details>` : "";
   const what = d.kind === "post" ? "Posts to Bluesky right away. You can undo it for 10 minutes."
     : d.kind === "email" ? `Sends to ${esc(mail.to)} right away. Emails can't be unsent.` : "Marks it done. Nothing is posted or sent.";
+  const gone = removedOf(d).size;
+  const dropped = gone ? ` ${gone} image${gone > 1 ? "s" : ""} removed.` : "";
   const learn = isChanged
-    ? `<b>${esc(d.lead)} learns from your changes.</b> Editing resets the approval streak (${d.streak} of ${d.promote_after}).`
+    ? `<b>${esc(d.lead)} learns from your changes.</b>${dropped} Editing resets the approval streak (${d.streak} of ${d.promote_after}).`
     : `Approving without changes counts toward ${esc(d.lead)}'s streak: <b>${Math.min(d.streak + 1, d.promote_after)} of ${d.promote_after}</b>.`;
   const left = Math.max(0, 2 - d.revision);
   const reject = ui.rejecting === id ? `
@@ -631,6 +751,7 @@ function renderReview() {
         ${mailhead}
         ${tabs}
         ${body}
+        ${images}
         ${rules}
         <div class="consequence">${what} ${learn}</div>
       </div>
@@ -697,6 +818,35 @@ function renderSpend() {
     <p class="sub" style="margin:0">Costs are what OpenRouter billed for each call, never an estimate.</p>`;
 }
 
+function renderSchedules() {
+  const rows = data.schedules;
+  if (!rows.length) {
+    $("schedules").innerHTML = `<p class="empty">No schedules yet. Ask a team in its Telegram topic, for example: “Every Monday at 9, research a topic around my business and propose a newsletter.”</p>`;
+    return;
+  }
+  $("schedules").innerHTML = `
+    <div class="table-wrap"><table>
+      <thead><tr><th>What</th><th>Team</th><th>When</th><th>Next run</th><th>Last run</th><th></th></tr></thead>
+      <tbody>${rows.map((r) => {
+        const key = `sched:${r.schedule_id}`;
+        const busy = ui.busy.has(key) ? "disabled" : "";
+        const state = !r.active ? ` <span class="pill neutral">Stopped</span>` : r.running ? ` <span class="pill in_progress"><span class="spin" aria-hidden="true"></span>Running now</span>` : "";
+        const buttons = r.active
+          ? `<button class="btn small ${workingClass(key, "run")}" type="button" data-act="sched-run" data-id="${esc(r.schedule_id)}" ${busy || (r.running ? "disabled" : "")}>${busyLabel(key, "run", "▶ Run now")}</button>
+             <button class="btn small danger ${workingClass(key, "stop")}" type="button" data-act="sched-stop" data-id="${esc(r.schedule_id)}" ${busy}>${busyLabel(key, "stop", "■ Stop")}</button>`
+          : `<button class="btn small ${workingClass(key, "start")}" type="button" data-act="sched-start" data-id="${esc(r.schedule_id)}" ${busy}>${busyLabel(key, "start", "↻ Turn on")}</button>`;
+        return `<tr>
+          <td class="sched-what"><b>${esc(r.title)}${state}</b><small>${esc(r.request)}</small></td>
+          <td><span class="person">${avatar(r.lead, 0, "sm")}${esc(r.team)}</span></td>
+          <td>${esc(r.cadence)}</td>
+          <td class="mono"><small>${esc(fmtWhen(r.next_run_at))}</small></td>
+          <td class="mono"><small>${esc(fmtWhen(r.last_run_at))}</small></td>
+          <td><div class="sched-actions">${buttons}</div></td>
+        </tr>`;
+      }).join("")}</tbody>
+    </table></div>`;
+}
+
 function renderLessons() {
   $("lessons-title").textContent = data.lead ? `What ${data.lead} knows about you` : "What your teams know about you";
   const group = (kind, label) => {
@@ -704,6 +854,7 @@ function renderLessons() {
     if (!items.length) return "";
     return `<div class="label">${label}</div>` + items.map((l) => `
       <div class="lesson">
+        ${avatar(l.lead, 0, "sm")}
         <p>${esc(l.text)}</p>
         <button class="btn small quiet ${workingClass(l.lesson_id, "forget")}" data-act="forget" data-id="${esc(l.lesson_id)}" type="button" ${ui.busy.has(l.lesson_id) ? "disabled" : ""}>${busyLabel(l.lesson_id, "forget", "Forget")}</button>
         <div class="meta"><span class="${l.business_wide ? "all" : ""}">${esc(l.scope)}</span><span>${esc(l.source)}</span>${l.only ? `<span>${esc(l.only)}</span>` : ""}</div>
@@ -726,6 +877,7 @@ function renderLog() {
         <div class="what">
           <b class="${a.undone_at ? "undone" : ""}">${esc(a.summary)}</b>
           ${a.task ? `<small class="sub">${esc(a.task)}</small>` : ""}
+          ${a.images.length ? `<div class="pics">${a.images.map((image) => thumbImg(image, "thumb sm")).join("")}</div>` : ""}
           <div class="tags">${tags.join("")}</div>
           ${a.url && !a.undone_at ? `<a href="${esc(a.url)}" target="_blank" rel="noopener noreferrer">View</a>` : ""}
         </div>
@@ -758,7 +910,7 @@ function renderTemplates() {
     <div class="tpl">
       <h3>${esc(t.display_name)}</h3>
       <p>${esc(t.description)}</p>
-      <p>${esc(t.people)}</p>
+      <div class="people">${t.personas.map((p, i) => avatar(p, i, "sm")).join("")}<span class="sub">${esc(t.people)}</span></div>
       ${t.hired
         ? `<span class="pill ok" style="justify-self:start">Hired</span>`
         : `<button class="btn primary small ${workingClass("hire", t.name)}" style="justify-self:start" data-act="hire" data-id="${esc(t.name)}" type="button" ${ui.busy.has("hire") ? "disabled" : ""}>${busyLabel("hire", t.name, `Hire ${esc(t.display_name)}`)}</button>`}
@@ -769,8 +921,30 @@ function render() {
   if (!data) return;
   document.title = `${data.business.name} · Tenure`;
   $("biz-name").textContent = data.business.name;
-  renderStrip(); renderTeams(); renderInbox(); renderTasks(); renderSpend(); renderLessons(); renderLog(); renderTemplates();
+  renderHome(); renderTeams(); renderInbox(); renderTasks(); renderSpend(); renderSchedules(); renderLessons(); renderLog(); renderTemplates();
 }
+
+function showPage(name, focus = false) {
+  if (!PAGES.includes(name)) name = "home";
+  ui.page = name;
+  for (const page of PAGES) {
+    const tab = $(`t-${page}`);
+    const on = page === name;
+    tab.setAttribute("aria-selected", String(on));
+    tab.tabIndex = on ? 0 : -1;
+    $(`p-${page}`).hidden = !on;
+  }
+  if (focus) $(`t-${name}`).focus();
+  if (location.hash.slice(1) !== name) history.replaceState(null, "", name === "home" ? location.pathname : `#${name}`);
+}
+window.addEventListener("hashchange", () => showPage(location.hash.slice(1)));
+$("nav").addEventListener("keydown", (event) => {
+  const step = { ArrowRight: 1, ArrowLeft: -1 }[event.key];
+  if (!step) return;
+  event.preventDefault();
+  const at = PAGES.indexOf(ui.page);
+  showPage(PAGES[(at + step + PAGES.length) % PAGES.length], true);
+});
 
 function renderLive() {
   const live = $("live");
@@ -810,6 +984,12 @@ async function load() {
 }
 
 document.addEventListener("click", (event) => {
+  const nav = event.target.closest("[data-page]");
+  if (nav) { showPage(nav.dataset.page); return; }
+  const review = event.target.closest("[data-review]");
+  if (review) { showPage("drafts"); select(review.dataset.review); return; }
+  const link = event.target.closest('a[href^="#"]');
+  if (link) { event.preventDefault(); showPage(link.getAttribute("href").slice(1)); return; }
   const pick = event.target.closest("[data-pick]");
   if (pick) { select(pick.dataset.pick); return; }
   const tab = event.target.closest("[data-tab]");
@@ -832,6 +1012,7 @@ document.addEventListener("click", (event) => {
       if (changed(d)) {
         body.text = textOf(d);
         if (d.kind === "email") Object.assign(body, mailOf(d));
+        if (removedOf(d).size) body.images = keptImages(d).map((image) => image.file_id);
       }
       const verb = d.kind === "post" ? "Posting" : d.kind === "email" ? "Sending" : "Approving";
       const doing = changed(d)
@@ -842,7 +1023,18 @@ document.addEventListener("click", (event) => {
     }
     case "edit": ui.tab = "edit"; renderReview(); $("editor")?.focus(); break;
     case "preview": ui.tab = "view"; renderReview(); break;
-    case "revert": delete ui.edits[d.approval_id]; delete ui.mail[d.approval_id]; ui.tab = "view"; renderInbox(true); break;
+    case "revert": delete ui.edits[d.approval_id]; delete ui.mail[d.approval_id]; delete ui.removed[d.approval_id]; ui.tab = "view"; renderInbox(true); break;
+    case "img-toggle": {
+      const set = ui.removed[d.approval_id] || new Set();
+      const file = el.dataset.file;
+      if (set.has(file)) set.delete(file); else set.add(file);
+      if (set.size) ui.removed[d.approval_id] = set; else delete ui.removed[d.approval_id];
+      renderInbox(true);
+      break;
+    }
+    case "sched-run": act(`sched:${id}`, `/schedules/${id}/run`, undefined, { kind: "run", label: "Starting…" }); break;
+    case "sched-stop": act(`sched:${id}`, `/schedules/${id}/stop`, undefined, { kind: "stop", label: "Stopping…" }); break;
+    case "sched-start": act(`sched:${id}`, `/schedules/${id}/start`, undefined, { kind: "start", label: "Turning on…" }); break;
     case "reject": ui.rejecting = d.approval_id; renderReview(); $("reason")?.focus(); break;
     case "cancel-reject": ui.rejecting = null; ui.picked.clear(); renderReview(); break;
     case "revise": {
@@ -885,7 +1077,7 @@ document.addEventListener("keydown", (event) => {
     if (event.key === "Escape" && $("review").contains(active)) { active.blur(); ui.tab = "view"; renderReview(); }
     return;
   }
-  if (event.metaKey || event.ctrlKey || event.altKey || !data) return;
+  if (event.metaKey || event.ctrlKey || event.altKey || !data || ui.page !== "drafts") return;
   const key = event.key.toLowerCase();
   const click = (act) => document.querySelector(`#review [data-act="${act}"]`)?.click();
   if (key === "j") move(1);
@@ -923,6 +1115,7 @@ $("logout").addEventListener("click", async () => {
 $("open-hire").addEventListener("click", () => $("hire").showModal());
 $("close-hire").addEventListener("click", () => $("hire").close());
 
+showPage(location.hash.slice(1));
 load();
 setInterval(load, REFRESH_MS);
 setInterval(() => { renderLive(); if (data) { tickUndo(); tickSlow(); } }, 1000);

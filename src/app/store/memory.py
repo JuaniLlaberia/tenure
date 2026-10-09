@@ -9,8 +9,10 @@ from contract import (
     Approval,
     AuditEntry,
     BusinessProfile,
+    FileRef,
     Lesson,
     ModelUsage,
+    Schedule,
     Task,
     Team,
     Trust,
@@ -39,6 +41,8 @@ class InMemoryStore:
         self._lessons: dict[str, Lesson] = {}
         self._actions: dict[str, AuditEntry] = {}
         self._usage: list[ModelUsage] = []
+        self._files: dict[str, tuple[FileRef, bytes]] = {}
+        self._schedules: dict[str, Schedule] = {}
         self._dashboards: dict[str, tuple[str | None, str | None]] = {}
         self._state: dict[tuple[str, str], tuple[Any, datetime]] = {}
 
@@ -127,7 +131,7 @@ class InMemoryStore:
         self._topics.pop(team_id, None)
         for key in [k for k in self._trust if k[0] == team_id]:
             del self._trust[key]
-        for records in (self._tasks, self._approvals, self._lessons):
+        for records in (self._tasks, self._approvals, self._lessons, self._schedules):
             for key in [k for k, v in records.items() if v.team_id == team_id]:
                 del records[key]
 
@@ -201,3 +205,41 @@ class InMemoryStore:
 
     async def log_usage(self, usage: ModelUsage) -> None:
         self._usage.append(_copy(usage))
+
+    async def save_schedule(self, schedule: Schedule) -> None:
+        self._schedules[schedule.schedule_id] = _copy(schedule)
+
+    async def get_schedule(self, schedule_id: str) -> Schedule | None:
+        return _copy(self._schedules.get(schedule_id))
+
+    async def list_schedules(
+        self, business_id: str, team_id: str | None = None
+    ) -> list[Schedule]:
+        found = [
+            s
+            for s in self._schedules.values()
+            if s.business_id == business_id and team_id in (None, s.team_id)
+        ]
+        return [_copy(s) for s in sorted(found, key=lambda s: s.created_at, reverse=True)]
+
+    async def due_schedules(self, now: datetime) -> list[Schedule]:
+        return [
+            _copy(s)
+            for s in self._schedules.values()
+            if s.active and (s.next_run_at is None or s.next_run_at <= now)
+        ]
+
+    async def store_file(self, ref: FileRef, data: bytes) -> None:
+        self._files[ref.file_id] = (_copy(ref), bytes(data))
+
+    async def get_file(self, business_id: str, file_id: str) -> FileRef | None:
+        found = self._files.get(file_id)
+        if found is None or found[0].business_id != business_id:
+            return None
+        return _copy(found[0])
+
+    async def file_bytes(self, business_id: str, file_id: str) -> bytes | None:
+        found = self._files.get(file_id)
+        if found is None or found[0].business_id != business_id:
+            return None
+        return found[1]

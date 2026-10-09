@@ -13,6 +13,7 @@ from telegram import (
     CopyTextButton,
     InlineKeyboardButton,
     InlineKeyboardMarkup,
+    InputMediaPhoto,
     LinkPreviewOptions,
     Message,
     Update,
@@ -31,7 +32,7 @@ from telegram.ext import (
 
 from app.chat import ui
 from app.chat.flows import Flows
-from app.chat.port import Keyboard
+from app.chat.port import IncomingFile, Keyboard
 from app.store.base import AppStore
 from contract import Brain
 
@@ -40,6 +41,7 @@ logger = logging.getLogger(__name__)
 NO_PREVIEW = LinkPreviewOptions(is_disabled=True)
 ATTEMPTS = 3
 TIMEOUT = 15
+REPORTS = ("drafts", "team", "schedules", "knowledge", "activity", "spend")
 
 T = TypeVar("T")
 
@@ -85,9 +87,33 @@ def _markup(keyboard: Keyboard | None) -> InlineKeyboardMarkup | None:
 def _thread(message: Message) -> int | None:
     return message.message_thread_id if message.is_topic_message else None
 
+def _incoming_file(message: Message) -> IncomingFile | None:
+    """
+    The photo (largest size), voice note, audio, document or video in a message.
+    """
+    if message.photo:
+        photo = message.photo[-1]
+        return IncomingFile(photo.file_id, "image/jpeg", None, photo.file_size)
+    for media, default in (
+        (message.voice, "audio/ogg"),
+        (message.audio, "audio/mpeg"),
+        (message.document, "application/octet-stream"),
+        (message.video, "video/mp4"),
+        (message.video_note, "video/mp4"),
+    ):
+        if media is not None:
+            return IncomingFile(
+                media.file_id,
+                getattr(media, "mime_type", None) or default,
+                getattr(media, "file_name", None),
+                media.file_size,
+            )
+    return None
+
 class TelegramChat:
     def __init__(self, bot: Bot) -> None:
         self._bot = bot
+        self._icons: dict[str, str] | None = None
 
     async def send(
         self, chat_id: int, thread_id: int | None, text: str, keyboard: Keyboard | None = None
@@ -121,6 +147,27 @@ class TelegramChat:
                 repeatable=True,
             )
         except BadRequest as error:
+            reason = str(error).lower()
+            if "no text in the message" in reason:
+                await self._edit_caption(chat_id, message_id, text, keyboard)
+            elif "not modified" not in reason:
+                raise
+
+    async def _edit_caption(
+        self, chat_id: int, message_id: int, text: str, keyboard: Keyboard | None
+    ) -> None:
+        try:
+            await _retry(
+                lambda: self._bot.edit_message_caption(
+                    chat_id=chat_id,
+                    message_id=message_id,
+                    caption=text,
+                    parse_mode=ParseMode.HTML,
+                    reply_markup=_markup(keyboard),
+                ),
+                repeatable=True,
+            )
+        except BadRequest as error:
             if "not modified" not in str(error).lower():
                 raise
 
@@ -130,11 +177,30 @@ class TelegramChat:
             repeatable=True,
         )
 
-    async def create_topic(self, chat_id: int, name: str) -> int:
+    async def create_topic(self, chat_id: int, name: str, icon: str | None = None) -> int:
+        icon_id = await self._icon_id(icon) if icon else None
         topic = await _retry(
-            lambda: self._bot.create_forum_topic(chat_id=chat_id, name=name), repeatable=False
+            lambda: self._bot.create_forum_topic(
+                chat_id=chat_id, name=name, icon_custom_emoji_id=icon_id
+            ),
+            repeatable=False,
         )
         return topic.message_thread_id
+
+    async def _icon_id(self, emoji: str) -> str | None:
+        """
+        The custom emoji id of a topic icon, if Telegram's preset icons include this emoji.
+        """
+        if self._icons is None:
+            try:
+                stickers = await self._bot.get_forum_topic_icon_stickers()
+            except Exception:
+                logger.debug("Couldn't load topic icons", exc_info=True)
+                return None
+            self._icons = {
+                (s.emoji or "").replace("\ufe0f", ""): s.custom_emoji_id for s in stickers
+            }
+        return self._icons.get(emoji.replace("\ufe0f", ""))
 
     async def delete_topic(self, chat_id: int, thread_id: int) -> None:
         await _retry(
@@ -154,6 +220,48 @@ class TelegramChat:
         await self._bot.send_chat_action(
             chat_id=chat_id, action=ChatAction.TYPING, message_thread_id=thread_id
         )
+
+    async def send_photo(
+        self,
+        chat_id: int,
+        thread_id: int | None,
+        photo: bytes,
+        caption: str = "",
+        keyboard: Keyboard | None = None,
+    ) -> int:
+        message = await _retry(
+            lambda: self._bot.send_photo(
+                chat_id=chat_id,
+                photo=photo,
+                caption=caption or None,
+                parse_mode=ParseMode.HTML,
+                message_thread_id=thread_id,
+                reply_markup=_markup(keyboard),
+            ),
+            repeatable=False,
+        )
+        return message.message_id
+
+    async def send_album(
+        self, chat_id: int, thread_id: int | None, photos: list[bytes], caption: str = ""
+    ) -> list[int]:
+        media = [
+            InputMediaPhoto(photo, caption=caption or None, parse_mode=ParseMode.HTML)
+            if n == 0
+            else InputMediaPhoto(photo)
+            for n, photo in enumerate(photos)
+        ]
+        messages = await _retry(
+            lambda: self._bot.send_media_group(
+                chat_id=chat_id, media=media, message_thread_id=thread_id
+            ),
+            repeatable=False,
+        )
+        return [message.message_id for message in messages]
+
+    async def download(self, telegram_id: str) -> bytes:
+        file = await _retry(lambda: self._bot.get_file(telegram_id), repeatable=True)
+        return bytes(await file.download_as_bytearray())
 
 def build_application(
     token: str, brain: Brain, store: AppStore, dashboard_url: str
@@ -191,6 +299,13 @@ def build_application(
         message = update.effective_message
         await flows.on_help(message.chat_id, _thread(message))
 
+    def report(kind: str):
+        async def handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+            message = update.effective_message
+            await flows.on_report(message.chat_id, _thread(message), kind)
+
+        return handler
+
     async def dashboard(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         message = update.effective_message
         await flows.on_dashboard(message.chat_id, _thread(message))
@@ -205,6 +320,20 @@ def build_application(
             return
         await flows.on_text(
             message.chat_id, _thread(message), message.text, message.message_id, message.date
+        )
+
+    async def media(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+        message = update.effective_message
+        file = _incoming_file(message)
+        if message.from_user is None or message.from_user.is_bot or file is None:
+            return
+        await flows.on_file(
+            message.chat_id,
+            _thread(message),
+            message.caption or "",
+            file,
+            message.message_id,
+            message.date,
         )
 
     async def private(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -233,8 +362,19 @@ def build_application(
     application.add_handler(CommandHandler("cancel", cancel, filters=groups))
     application.add_handler(CommandHandler("help", help_, filters=groups))
     application.add_handler(CommandHandler("dashboard", dashboard, filters=groups))
+    for kind in REPORTS:
+        application.add_handler(CommandHandler(kind, report(kind), filters=groups))
     application.add_handler(CommandHandler("dashboard_stop", dashboard_stop, filters=groups))
     application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND & groups, text))
+    files = (
+        filters.PHOTO
+        | filters.VOICE
+        | filters.AUDIO
+        | filters.Document.ALL
+        | filters.VIDEO
+        | filters.VIDEO_NOTE
+    )
+    application.add_handler(MessageHandler(files & groups, media))
     application.add_handler(MessageHandler(filters.ChatType.PRIVATE, private))
     application.add_handler(CallbackQueryHandler(tap))
     application.add_error_handler(failed)

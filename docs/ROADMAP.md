@@ -6,6 +6,7 @@ Agreed by Mark and Juan on Oct 9. The shapes are in [CONTRACT.md](./CONTRACT.md)
 
 - **Juan (brain):** open [docs/brain/README.md](./brain/README.md) and start at **stage 10**. Stages 10–14 each have the design, files, interfaces and tests ready, with the OpenRouter formats, model candidates and prices already checked. Workflow as before: tests first, review, then green.
 - **Mark (app):** follow the **App** part of each feature below, in the timeline's order. The [app reference](#app-reference) at the end has the Telegram, Bluesky, Resend and Supabase details. Publish a mockup before any UI (approval card with images, tabbed dashboard, schedule card, "Meet your team").
+- **Telegram parity (Mark, Oct 9):** everything the dashboard can do must also work from Telegram alone; the dashboard is the organized view of the same things, never the only place for an action. So the app adds an edit menu on drafts (text, subject, recipient, ✕ image) and the commands `/drafts`, `/team` (lower trust, promotion threshold), `/schedules`, `/knowledge`, `/activity` and `/spend`.
 - **Both:** develop against the other side's fakes. The brain has `FakeTools` and `InMemoryStore` (stages 10 and 14 extend them); the app has `FakeBrain`, which already saves a schedule for "every Monday …" and has `run_schedule`. Merge at the three merge points in the timeline.
 
 **Time box.** Submission is Sat Oct 10, 11:59 PM, with the demo video. Code freezes Sat 5 PM so there is time to record, deploy and submit. Anything not working by then is cut from the demo, not rushed in.
@@ -66,7 +67,7 @@ Agreed by Mark and Juan on Oct 9. The shapes are in [CONTRACT.md](./CONTRACT.md)
 - **Storage:** download each file and store it in Supabase Storage (a private `files` bucket, path `{business_id}/{file_id}`). A `files` table holds the `FileRef` rows; the memory store is used in tests.
 - **Debounce** joins captions and files; a Telegram album is one message.
 - **`RealTools.read_file`** returns the bytes, and `save_file` stores them.
-- **During an edit:** a photo sent while an edit is open gets "Send the text; images can be removed on the dashboard".
+- **During an edit:** a photo sent while an edit is open gets "I need text here", and the edit stays open. Images are removed from a draft with the edit menu's "✕ Image n" (Telegram) or "Remove" (dashboard).
 - **`FakeBrain`** acknowledges attachments by kind.
 
 **Done when** the spoken demo request gives the same drafts as the typed one, and "post this photo …" puts the photo on the approval card and then on Bluesky.
@@ -191,7 +192,7 @@ The tab lives in the URL hash (`#drafts`), so a reload or a Telegram link opens 
 1. The founder writes "Each Monday at 9, research an interesting topic around my business and propose a newsletter".
 2. Maya confirms with a card: "Every Monday at 9:00 · Monday newsletter idea", with **Run now** and **Stop**.
 3. Each run's drafts wait for approval as usual. Once newsletters have earned `act_and_report`, the Monday newsletter simply goes out and is reported: the employee story in one line.
-4. "Stop the Monday newsletter" and "make it Tuesdays" work in chat; the card and the dashboard also stop it.
+4. "Stop the Monday newsletter" and "make it Tuesdays" work in chat. The card, `/schedules` and the dashboard also run, stop and turn schedules back on.
 
 **Brain stage:** [14](./brain/stage-14-schedules.md).
 

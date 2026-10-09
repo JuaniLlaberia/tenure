@@ -6,6 +6,7 @@ from tests.app.fakes import NOW, Clock, FakeChat, Sent
 
 from app.chat import ui
 from app.chat.flows import Flows
+from app.chat.port import IncomingFile
 from app.fake_brain import FakeBrain
 from app.store.memory import InMemoryStore
 from contract import IncomingMessage
@@ -376,3 +377,86 @@ async def test_restart_cleans_up_status_lines_and_password_messages(chat, clock)
     await asyncio.sleep(0.01)
     assert password.message_id - 1 in chat.deleted
     assert password.message_id in chat.deleted
+
+class Recording(FakeBrain):
+    def __init__(self, **kwargs) -> None:
+        super().__init__(**kwargs)
+        self.seen: list[IncomingMessage] = []
+
+    def handle_message(self, msg):
+        self.seen.append(msg)
+        return super().handle_message(msg)
+
+async def send_file(flows, file: IncomingFile, caption: str = "", thread_id=None, message_id=20):
+    await flows.on_file(CHAT, thread_id, caption, file, message_id, NOW)
+
+async def test_a_voice_note_reaches_the_brain_as_an_attachment(chat, clock):
+    brain = Recording(clock=clock)
+    flows = Flows(brain, chat, debounce=0.05, clock=clock)
+    thread_id = await marketing_team(flows, chat)
+    brain.seen.clear()
+    chat.files["voice-1"] = b"OggS..."
+
+    await send_file(flows, IncomingFile("voice-1", "audio/ogg", None, 7), thread_id=thread_id)
+    await flows.drain()
+
+    (message,) = brain.seen
+    assert message.text == ""
+    (voice,) = message.attachments
+    assert (voice.kind, voice.mime_type, voice.source) == ("audio", "audio/ogg", "founder")
+    assert await flows._files.read(message.business_id, voice.file_id) == b"OggS..."
+
+async def test_caption_text_and_album_join_into_one_message(chat, clock):
+    brain = Recording(clock=clock)
+    flows = Flows(brain, chat, debounce=0.05, clock=clock)
+    await flows.on_start(CHAT, None, is_forum=True)
+    await flows.drain()
+    brain.seen.clear()
+    chat.files.update({"p1": b"one", "p2": b"two"})
+
+    await send_file(flows, IncomingFile("p1", "image/jpeg"), caption="Our new studio")
+    await send_file(flows, IncomingFile("p2", "image/jpeg"), message_id=21)
+    await flows.on_text(CHAT, None, "post these", 22, NOW)
+    await flows.drain()
+
+    (message,) = brain.seen
+    assert message.text == "Our new studio\npost these"
+    assert [a.kind for a in message.attachments] == ["image", "image"]
+
+async def test_files_over_20_mb_are_refused_without_calling_the_brain(chat, clock):
+    brain = Recording(clock=clock)
+    flows = Flows(brain, chat, debounce=0, clock=clock)
+    await flows.on_start(CHAT, None, is_forum=True)
+    await flows.drain()
+    brain.seen.clear()
+
+    await send_file(flows, IncomingFile("big", "video/mp4", "launch.mov", 48 * 1_048_576))
+    await flows.drain()
+
+    assert brain.seen == []
+    assert chat.last(None).text.startswith("That file is 48 MB; I can take files up to 20 MB")
+
+async def test_a_file_during_an_edit_keeps_the_edit_open(flows, chat):
+    thread_id = await marketing_team(flows, chat)
+    post, _ = await drafts(flows, chat, thread_id)
+    await tap(flows, post, "Edit")
+    chat.files["p1"] = b"img"
+
+    await send_file(flows, IncomingFile("p1", "image/jpeg"), thread_id=thread_id)
+
+    assert chat.last(thread_id).text == ui.FILE_DURING_EDIT
+    await say(flows, "We launch Friday!", thread_id)
+    assert "Posted to Bluesky" in chat.find("Posted to Bluesky").text
+
+async def test_a_failed_download_says_so_and_sends_nothing(chat, clock):
+    brain = Recording(clock=clock)
+    flows = Flows(brain, chat, debounce=0, clock=clock)
+    await flows.on_start(CHAT, None, is_forum=True)
+    await flows.drain()
+    brain.seen.clear()
+
+    await send_file(flows, IncomingFile("missing", "image/jpeg"))
+    await flows.drain()
+
+    assert brain.seen == []
+    assert chat.last(None).text == ui.FILE_FAILED

@@ -13,18 +13,20 @@ from pathlib import Path
 from typing import Any
 
 from fastapi import FastAPI, HTTPException, Request, Response
-from fastapi.responses import HTMLResponse, JSONResponse
+from fastapi.responses import FileResponse, HTMLResponse, JSONResponse
 from pydantic import BaseModel, Field
 
 from app.chat.flows import Flows, Refused
 from app.store.base import AppStore
+from app.tools import images as pictures
 from app.web import auth
 from app.web.overview import PROMOTE_AFTER_MAX, build_overview
-from contract import AutonomyLevel, Brain, PlannedAction, PostSocial, SendEmail
+from contract import Brain, FileKind, PlannedAction, PostSocial, SendEmail
 
 PAGE = Path(__file__).with_name("dashboard.html")
+AVATARS = Path(__file__).resolve().parents[3] / "assets" / "avatars"
+AVATAR_TYPES = {".png", ".jpg", ".jpeg", ".webp", ".svg"}
 COOKIE = "tenure_session"
-LEVELS = list(AutonomyLevel)
 GONE = "This dashboard link isn't valid or was turned off. Send /dashboard for a new one."
 EMAIL = re.compile(r"[^@\s]+@[^@\s]+\.[^@\s]+")
 POST_LIMIT = 300
@@ -40,6 +42,7 @@ class Approve(BaseModel):
     text: str | None = None
     subject: str | None = None
     to: str | None = None
+    images: list[str] | None = None
 
 class Reject(BaseModel):
     reason: str | None = None
@@ -52,24 +55,35 @@ class Threshold(BaseModel):
     team_id: str
     promote_after: int = Field(ge=1, le=PROMOTE_AFTER_MAX)
 
+def _kept_images(planned: PostSocial | SendEmail, keep: list[str] | None) -> list:
+    """
+    The draft's images the founder kept, in the order given. Only removing is allowed.
+    """
+    if keep is None:
+        return planned.images
+    by_id = {ref.file_id: ref for ref in planned.images}
+    if len(set(keep)) != len(keep) or any(file_id not in by_id for file_id in keep):
+        raise Refused("Those images aren't all part of the draft.")
+    return [by_id[file_id] for file_id in keep]
+
 def _edited(planned: PlannedAction | None, body: Approve) -> PlannedAction | None:
     """
     The founder's version of the action, or None if nothing changed.
     """
     if isinstance(planned, PostSocial):
         text = planned.text if body.text is None else body.text
-        if text == planned.text:
-            return None
         if not text.strip():
             raise Refused("The post can't be empty.")
         if len(text) > POST_LIMIT:
             raise Refused(f"That's {len(text)} characters; Bluesky allows {POST_LIMIT}.")
-        return PostSocial(text=text)
+        version = PostSocial(text=text, images=_kept_images(planned, body.images))
+        return None if version == planned else version
     if isinstance(planned, SendEmail):
         version = SendEmail(
             to=(planned.to if body.to is None else body.to).strip(),
             subject=(planned.subject if body.subject is None else body.subject).strip(),
             body=planned.body if body.text is None else body.text,
+            images=_kept_images(planned, body.images),
         )
         if version == planned:
             return None
@@ -100,7 +114,7 @@ def create_api(
     @api.middleware("http")
     async def private(request: Request, call_next):
         response = await call_next(request)
-        response.headers["Cache-Control"] = "no-store"
+        response.headers.setdefault("Cache-Control", "no-store")
         response.headers["Referrer-Policy"] = "no-referrer"
         response.headers["X-Robots-Tag"] = "noindex"
         response.headers["X-Frame-Options"] = "DENY"
@@ -161,7 +175,9 @@ def create_api(
     @api.get("/b/{token}/api/overview")
     async def overview(token: str, request: Request) -> dict[str, Any]:
         business_id = await business(request, token)
-        return await build_overview(store, brain, business_id, clock(), flows.deciding)
+        return await build_overview(
+            store, brain, business_id, clock(), flows.deciding, flows.running_schedules
+        )
 
     @api.post("/b/{token}/api/hire")
     async def hire(token: str, body: Hire, request: Request) -> dict[str, str]:
@@ -180,11 +196,13 @@ def create_api(
         if version is None:
             await flows.decide_from_dashboard(business_id, approval_id, "approve")
             return {"message": "Approved. The result shows up in Telegram too."}
-        text = version.text if isinstance(version, PostSocial) else version.body
-        whole = isinstance(version, SendEmail) and (
-            version.to != approval.planned_action.to
-            or version.subject != approval.planned_action.subject
-        )
+        if isinstance(version, PostSocial):
+            text = version.text
+            only_text = version.model_copy(update={"text": approval.planned_action.text})
+        else:
+            text = version.body
+            only_text = version.model_copy(update={"body": approval.planned_action.body})
+        whole = only_text != approval.planned_action
         await flows.decide_from_dashboard(
             business_id,
             approval_id,
@@ -210,29 +228,56 @@ def create_api(
     @api.post("/b/{token}/api/trust/lower")
     async def lower(token: str, body: Lower, request: Request) -> dict[str, str]:
         business_id = await business(request, token)
-        team = await store.get_team(body.team_id)
-        trust = await store.get_trust(body.team_id, body.task_type)
-        if team is None or team.business_id != business_id or trust is None:
-            raise Refused("I can't find that team.")
-        index = LEVELS.index(trust.level)
-        if index == 0:
-            raise Refused("This is already the lowest level.")
-        update = {"level": LEVELS[index - 1], "approval_streak": 0, "updated_at": clock()}
-        await store.set_trust(trust.model_copy(update=update))
+        await flows.lower_trust(business_id, body.team_id, body.task_type)
         return {"message": "Lowered. The team will ask more often from now on."}
 
     @api.post("/b/{token}/api/trust/threshold")
     async def threshold(token: str, body: Threshold, request: Request) -> dict[str, str]:
         business_id = await business(request, token)
-        team = await store.get_team(body.team_id)
-        if team is None or team.business_id != business_id:
-            raise Refused("I can't find that team.")
-        for trust in await store.list_trust(body.team_id):
-            update = {"promote_after": body.promote_after, "updated_at": clock()}
-            await store.set_trust(trust.model_copy(update=update))
+        await flows.set_threshold(business_id, body.team_id, body.promote_after)
         n = body.promote_after
         approvals = "approval" if n == 1 else "approvals"
         return {"message": f"The team asks for more autonomy after {n} {approvals}."}
+
+    @api.get("/b/{token}/api/files/{file_id}")
+    async def file(token: str, file_id: str, request: Request, thumb: bool = False) -> Response:
+        business_id = await business(request, token)
+        ref = await store.get_file(business_id, file_id)
+        data = await store.file_bytes(business_id, file_id) if ref else None
+        if ref is None or data is None:
+            raise HTTPException(404, "That file isn't here anymore.")
+        media_type = ref.mime_type
+        if thumb and ref.kind == FileKind.IMAGE:
+            try:
+                data = await asyncio.to_thread(pictures.thumbnail, data)
+                media_type = "image/jpeg"
+            except Exception:
+                pass
+        headers = {"Cache-Control": "private, max-age=3600"}
+        return Response(data, media_type=media_type, headers=headers)
+
+    @api.get("/avatars/{path:path}")
+    async def avatar(path: str) -> FileResponse:
+        found = (AVATARS / path).resolve()
+        inside = found.is_relative_to(AVATARS.resolve())
+        if not inside or found.suffix.lower() not in AVATAR_TYPES or not found.is_file():
+            raise HTTPException(404, "No such picture.")
+        return FileResponse(found, headers={"Cache-Control": "public, max-age=86400"})
+
+    @api.post("/b/{token}/api/schedules/{schedule_id}/run")
+    async def run_schedule(token: str, schedule_id: str, request: Request) -> dict[str, str]:
+        await flows.run_schedule_now(await business(request, token), schedule_id)
+        return {"message": "Running now. Drafts show up here and in Telegram."}
+
+    @api.post("/b/{token}/api/schedules/{schedule_id}/stop")
+    async def stop_schedule(token: str, schedule_id: str, request: Request) -> dict[str, str]:
+        await flows.set_schedule_active(await business(request, token), schedule_id, False)
+        return {"message": "Stopped. Turn it back on anytime."}
+
+    @api.post("/b/{token}/api/schedules/{schedule_id}/start")
+    async def start_schedule(token: str, schedule_id: str, request: Request) -> dict[str, str]:
+        await flows.set_schedule_active(await business(request, token), schedule_id, True)
+        return {"message": "Turned back on."}
 
     @api.post("/b/{token}/api/lessons/{lesson_id}/forget")
     async def forget(token: str, lesson_id: str, request: Request) -> dict[str, str]:

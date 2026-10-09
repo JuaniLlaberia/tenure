@@ -131,6 +131,38 @@ create table if not exists model_usage (
 );
 create index if not exists model_usage_business on model_usage (business_id, at desc);
 
+create table if not exists files (
+    file_id uuid primary key,
+    business_id uuid not null references businesses on delete cascade,
+    kind text not null,
+    mime_type text not null,
+    name text,
+    size_bytes integer not null,
+    source text not null,
+    alt_text text,
+    created_at timestamptz not null
+);
+
+create table if not exists schedules (
+    schedule_id uuid primary key,
+    business_id uuid not null references businesses on delete cascade,
+    team_id uuid not null,
+    title text not null,
+    request text not null,
+    cadence jsonb not null,
+    active boolean not null,
+    next_run_at timestamptz,
+    last_run_at timestamptz,
+    created_at timestamptz not null
+);
+create index if not exists schedules_due on schedules (active, next_run_at);
+
+alter table tasks add column if not exists schedule_id uuid;
+alter table approvals add column if not exists media jsonb not null default '[]';
+
+insert into storage.buckets (id, name, public) values ('files', 'files', false)
+on conflict (id) do nothing;
+
 create table if not exists telegram_state (
     kind text not null,
     key text not null,
@@ -149,4 +181,6 @@ alter table approvals enable row level security;
 alter table lessons enable row level security;
 alter table audit_log enable row level security;
 alter table model_usage enable row level security;
+alter table files enable row level security;
+alter table schedules enable row level security;
 alter table telegram_state enable row level security;

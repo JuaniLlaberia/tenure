@@ -10,14 +10,17 @@ from contract import (
     Approval,
     AuditEntry,
     BusinessProfile,
+    FileRef,
     Lesson,
     ModelUsage,
+    Schedule,
     Task,
     Team,
     Trust,
 )
 
 RESOLVED = ["approved", "edited", "rejected"]
+BUCKET = "files"
 
 M = TypeVar("M", bound=BaseModel)
 
@@ -183,7 +186,8 @@ class SupabaseStore:
 
     async def delete_team(self, team_id: str) -> None:
         db = await self._db()
-        for table in ("telegram_topics", "trust", "approvals", "tasks", "lessons", "teams"):
+        tables = ("telegram_topics", "trust", "approvals", "tasks", "lessons", "schedules", "teams")
+        for table in tables:
             await db.table(table).delete().eq("team_id", team_id).execute()
 
     async def get_profile(self, business_id: str) -> BusinessProfile | None:
@@ -263,3 +267,46 @@ class SupabaseStore:
     async def log_usage(self, usage: ModelUsage) -> None:
         db = await self._db()
         await db.table("model_usage").insert(_row(usage)).execute()
+
+    async def save_schedule(self, schedule: Schedule) -> None:
+        await self._upsert("schedules", _row(schedule))
+
+    async def get_schedule(self, schedule_id: str) -> Schedule | None:
+        return await self._get("schedules", Schedule, schedule_id=schedule_id)
+
+    async def list_schedules(
+        self, business_id: str, team_id: str | None = None
+    ) -> list[Schedule]:
+        db = await self._db()
+        query = db.table("schedules").select("*").eq("business_id", business_id)
+        if team_id is not None:
+            query = query.eq("team_id", team_id)
+        rows = (await query.order("created_at", desc=True).execute()).data
+        return [Schedule.model_validate(row) for row in rows]
+
+    async def due_schedules(self, now: datetime) -> list[Schedule]:
+        db = await self._db()
+        query = (
+            db.table("schedules")
+            .select("*")
+            .eq("active", True)
+            .or_(f"next_run_at.is.null,next_run_at.lte.{now.isoformat()}")
+        )
+        return [Schedule.model_validate(row) for row in (await query.execute()).data]
+
+    async def store_file(self, ref: FileRef, data: bytes) -> None:
+        db = await self._db()
+        await db.storage.from_(BUCKET).upload(
+            f"{ref.business_id}/{ref.file_id}", data, {"content-type": ref.mime_type}
+        )
+        await self._upsert("files", _row(ref))
+
+    async def get_file(self, business_id: str, file_id: str) -> FileRef | None:
+        return await self._get("files", FileRef, business_id=business_id, file_id=file_id)
+
+    async def file_bytes(self, business_id: str, file_id: str) -> bytes | None:
+        db = await self._db()
+        try:
+            return await db.storage.from_(BUCKET).download(f"{business_id}/{file_id}")
+        except Exception:
+            return None

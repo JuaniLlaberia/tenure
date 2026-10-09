@@ -3,7 +3,9 @@ Telegram texts and keyboards for every brain event, as approved in the mockup.
 Pure functions: HTML strings (Telegram parse mode) and Button rows.
 """
 
+from datetime import datetime
 from html import escape
+from zoneinfo import ZoneInfo
 
 from app.chat.port import Button, Keyboard
 from contract import (
@@ -12,6 +14,7 @@ from contract import (
     Ask,
     AutonomyLevel,
     Error,
+    FileRef,
     LessonLearned,
     NeedsApproval,
     Persona,
@@ -20,6 +23,7 @@ from contract import (
     Progress,
     PromotionOffer,
     Say,
+    Schedule,
     SendEmail,
     TeamHired,
     TemplateInfo,
@@ -27,6 +31,7 @@ from contract import (
 
 POST_LIMIT = 300
 PREVIEW_LIMIT = 3000
+CAPTION_LIMIT = 1024
 EXPANDABLE_AFTER = 600
 
 APPROVE = "ap"
@@ -42,6 +47,13 @@ KEEP = "rk"
 PROMOTE_YES = "py"
 PROMOTE_NO = "pn"
 FORGET = "fg"
+RUN_NOW = "sr"
+EDIT_FIELD = "ef"
+EDIT_APPROVE = "ea"
+EDIT_MORE = "em"
+EDIT_UNDO = "eu"
+STOP = "ss"
+TURN_ON = "so"
 
 TASK_TITLES = {
     "social_post": "Bluesky post",
@@ -60,10 +72,18 @@ HELP = (
     "<b>What I can do</b>\n"
     "/start: set up your business (in the company group)\n"
     "/hire: hire a team, e.g. /hire marketing\n"
+    "/drafts: everything waiting for your OK\n"
+    "/team: trust per task, lower it, and when the team asks for more\n"
+    "/schedules: repeating work; run, stop or turn back on\n"
+    "/knowledge: what the team knows about you, with Forget\n"
+    "/activity: what went out, with Undo, and this week's tasks\n"
+    "/spend: what the models cost this week\n"
     "/cancel: stop an edit or a reason you started\n"
     "/dashboard: get the dashboard link and a new password\n"
     "/dashboard_stop: turn the dashboard off; the next /dashboard gets a new link\n\n"
-    "Talk to a team in its topic. Talk to Alex, your chief of staff, in General."
+    "In a team's topic these show that team; in General, the whole business. "
+    "Talk to a team in its topic, and to Alex, your chief of staff, in General. "
+    "You can send voice notes, photos and files too."
 )
 PRIVATE_HINT = (
     "Add me to your company group, turn on Topics in the group settings, "
@@ -81,9 +101,17 @@ BROKEN = "⚠️ Something went wrong on my side. Please try again."
 SETUP_DONE = "<b>Setup done.</b> Pick your first team:"
 ALREADY_HIRING = "That team is already being hired."
 PICK_TEAM = "Which team do you want to hire?"
+FILE_DURING_EDIT = (
+    "I need text here. To drop an image from a draft, use the dashboard. "
+    "/cancel stops the edit."
+)
+FILE_FAILED = "I couldn't download that file. Please send it again."
 
 APPROVED = "✓ Approved"
 EDITING = "✎ Editing: send your version below, or /cancel"
+EDITING_BELOW = "✎ Editing below"
+EDIT_UNDONE = "↺ Your changes are undone. The draft is back above."
+APPROVED_YOURS = "✓ Approved your version"
 EDITED = "✎ Edited"
 REJECTING = "✕ Rejecting: send your reason below, or /cancel"
 REJECTED = "✕ Rejected"
@@ -126,28 +154,43 @@ def ask_keyboard(key: str, replies: list[str]) -> Keyboard:
 def task_title(task_type: str) -> str:
     return TASK_TITLES.get(task_type, task_type.replace("_", " ").capitalize())
 
-def approval_meta(action: PlannedAction | None) -> str:
+def approval_meta(action: PlannedAction | None, media: list[FileRef] | None = None) -> str:
     if isinstance(action, PostSocial):
         return f"Bluesky post · {len(action.text)}/{POST_LIMIT} characters"
     if isinstance(action, SendEmail):
         return f"Email to {action.to}"
+    if media:
+        return "Image only, nothing gets posted"
     return "Draft only, nothing gets sent"
 
-def approval_text(event: NeedsApproval) -> str:
+def draft_images(event: NeedsApproval) -> list[FileRef]:
+    if event.planned_action is not None:
+        return list(event.planned_action.images)
+    return list(event.media)
+
+def images_meta(count: int, above: bool) -> str:
+    if not count:
+        return ""
+    words = "1 image" if count == 1 else f"{count} images"
+    return f" · {words} above" if above else f" · {words}"
+
+def approval_text(event: NeedsApproval, images_above: bool = False) -> str:
     preview = clip(event.preview, PREVIEW_LIMIT)
     tag = "blockquote expandable" if len(preview) > EXPANDABLE_AFTER else "blockquote"
-    meta = f"{approval_meta(event.planned_action)} · check {round(event.check_confidence * 100)}%"
+    pictures = images_meta(len(draft_images(event)), images_above)
+    confidence = f"check {round(event.check_confidence * 100)}%"
+    meta = f"{approval_meta(event.planned_action, event.media)}{pictures} · {confidence}"
     return (
         f"{header(event.persona)}Draft for approval: <b>{text(task_title(event.task_type))}</b>\n"
         f"<{tag}>{text(preview)}</blockquote>\n<i>{text(meta)}</i>"
     )
 
-def approval_keyboard(approval_id: str) -> Keyboard:
-    return [[
-        Button("✓ Approve", f"{APPROVE}:{approval_id}"),
-        Button("✎ Edit", f"{EDIT}:{approval_id}"),
-        Button("✕ Reject", f"{REJECT}:{approval_id}"),
-    ]]
+def approval_keyboard(approval_id: str, editable: bool = True) -> Keyboard:
+    approve = Button("✓ Approve", f"{APPROVE}:{approval_id}")
+    reject = Button("✕ Reject", f"{REJECT}:{approval_id}")
+    if not editable:
+        return [[approve, reject]]
+    return [[approve, Button("✎ Edit", f"{EDIT}:{approval_id}"), reject]]
 
 def reject_keyboard(approval_id: str) -> Keyboard:
     return [[
@@ -167,6 +210,74 @@ def edit_prompt(action: PlannedAction | None) -> str:
             f"/cancel keeps the draft. Current body:\n<pre>{text(action.body)}</pre>"
         )
     return "Send your version, or /cancel to keep the draft."
+
+FIELD_NAMES = {"text": "text", "subject": "subject", "to": "recipient"}
+
+def action_title(action: PlannedAction) -> str:
+    return "Bluesky post" if isinstance(action, PostSocial) else "Email"
+
+def edit_menu_text(action: PlannedAction) -> str:
+    return (
+        f"What do you want to change in the {action_title(action).lower()}? "
+        "Your changes wait here until you approve them."
+    )
+
+def edit_menu_keyboard(
+    approval_id: str, action: PlannedAction, original: PlannedAction
+) -> Keyboard:
+    fields = ["text"] if isinstance(action, PostSocial) else ["text", "subject", "to"]
+    rows = [
+        [Button(FIELD_NAMES[f].capitalize(), f"{EDIT_FIELD}:{approval_id}:{f}") for f in fields]
+    ]
+    kept = {image.file_id for image in action.images}
+    removable = [
+        Button(f"✕ Image {n}", f"{EDIT_FIELD}:{approval_id}:img{n}")
+        for n, image in enumerate(original.images, start=1)
+        if image.file_id in kept
+    ]
+    if removable:
+        rows.append(removable)
+    rows.append([Button("Cancel", f"{EDIT_UNDO}:{approval_id}")])
+    return rows
+
+def field_prompt(field: str, action: PlannedAction) -> str:
+    if field == "text" and isinstance(action, PostSocial):
+        return (
+            f"Send the new post text (max {POST_LIMIT} characters), or /cancel. "
+            f"Current text, tap to copy:\n<code>{text(action.text)}</code>"
+        )
+    current = getattr(action, "body" if field == "text" else field, "")
+    name = "email body" if field == "text" else FIELD_NAMES[field]
+    tag = "pre" if field == "text" else "code"
+    return f"Send the new {name}, or /cancel. Current:\n<{tag}>{text(current)}</{tag}>"
+
+def version_preview(action: PlannedAction) -> str:
+    if isinstance(action, PostSocial):
+        return action.text
+    return f"To: {action.to}\nSubject: {action.subject}\n\n{action.body}"
+
+def your_version_text(persona: Persona, action: PlannedAction, changes: list[str]) -> str:
+    preview = clip(version_preview(action), PREVIEW_LIMIT)
+    tag = "blockquote expandable" if len(preview) > EXPANDABLE_AFTER else "blockquote"
+    count = len(action.images)
+    pictures = f" · {count} image{'s' if count != 1 else ''}" if count or changes else ""
+    meta = "✎ " + " · ".join(changes) + pictures if changes else "No changes yet" + pictures
+    return (
+        f"{header(persona)}Your version: <b>{text(action_title(action))}</b>\n"
+        f"<{tag}>{text(preview)}</blockquote>\n<i>{text(meta)}</i>"
+    )
+
+def your_version_keyboard(approval_id: str) -> Keyboard:
+    return [
+        [Button("✓ Approve my version", f"{EDIT_APPROVE}:{approval_id}")],
+        [
+            Button("✎ Change more", f"{EDIT_MORE}:{approval_id}"),
+            Button("↺ Undo my changes", f"{EDIT_UNDO}:{approval_id}"),
+        ],
+    ]
+
+BAD_ADDRESS = "That doesn't look like an email address. Send it again, or /cancel."
+EMPTY_FIELD = "That's empty. Send it again, or /cancel."
 
 def too_long(length: int) -> str:
     return (
@@ -224,6 +335,8 @@ def forget_keyboard(lesson_id: str) -> Keyboard:
 def forgotten(persona: Persona) -> str:
     return f"Forgotten. {persona.name} won't use this anymore."
 
+TOPIC_ICONS = {"marketing": "📣", "design": "🎨", "finance": "💰", "sales": "🤝"}
+
 def roster_text(event: TeamHired) -> str:
     lines = [f"{text(p.name)} · {text(p.role)}" for p in event.personas]
     return f"<b>Your {text(event.display_name)} team</b>\n" + "\n".join(lines)
@@ -233,6 +346,10 @@ def hired_text(event: TeamHired) -> str:
     verb = "is" if len(event.personas) == 1 else "are"
     name = text(event.display_name)
     return f"<b>{name} team hired.</b> {text(names)} {verb} waiting in the {name} topic."
+
+def message_link(chat_id: int, thread_id: int | None, message_id: int) -> str:
+    base = f"https://t.me/c/{str(chat_id).removeprefix('-100')}"
+    return f"{base}/{thread_id}/{message_id}" if thread_id else f"{base}/{message_id}"
 
 def topic_link(chat_id: int, thread_id: int) -> str:
     return f"https://t.me/c/{str(chat_id).removeprefix('-100')}/{thread_id}"
@@ -285,6 +402,61 @@ def dashboard_text(password: str, minutes: int, url: str | None = None) -> str:
 def dashboard_keyboard(password: str, url: str | None = None) -> Keyboard:
     copy = Button("Copy password", copy=password)
     return [[copy, Button("→ Open dashboard", url=url)]] if url else [[copy]]
+
+def too_big(size: int, limit: int) -> str:
+    return (
+        f"That file is {round(size / 1_048_576)} MB; I can take files up to "
+        f"{limit // 1_048_576} MB. Send a smaller one, or tell me what's in it."
+    )
+
+WEEKDAY_NAMES = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"]
+SCHEDULE_STOPPED = "Stopped"
+TEAM_BUSY = "The team is waiting for your answer first. Answer it, then try again."
+
+def _place(timezone: str) -> str:
+    return timezone.rsplit("/", 1)[-1].replace("_", " ")
+
+def _ordinal(n: int) -> str:
+    suffix = "th" if 11 <= n % 100 <= 13 else {1: "st", 2: "nd", 3: "rd"}.get(n % 10, "th")
+    return f"{n}{suffix}"
+
+def cadence_words(schedule: Schedule) -> str:
+    cadence = schedule.cadence
+    at = f"{cadence.hour}:{cadence.minute:02d} ({_place(cadence.timezone)})"
+    if cadence.every == "day":
+        return f"Every day at {at}"
+    if cadence.every == "month":
+        return f"Every month on the {_ordinal(cadence.day or 1)} at {at}"
+    if cadence.weekday is None:
+        return f"Every week at {at}"
+    return f"Every {WEEKDAY_NAMES[cadence.weekday]} at {at}"
+
+def when(moment: datetime, timezone: str) -> str:
+    local = moment.astimezone(ZoneInfo(timezone))
+    return f"{local:%a %b} {local.day}, {local.hour}:{local.minute:02d}"
+
+def schedule_text(persona: Persona, schedule: Schedule, running: bool = False) -> str:
+    title = text(schedule.title)
+    if not schedule.active:
+        return f"{header(persona)}<s>🔁 {title}</s>\n<i>{SCHEDULE_STOPPED}</i>"
+    upcoming = "being scheduled"
+    if schedule.next_run_at is not None:
+        upcoming = when(schedule.next_run_at, schedule.cadence.timezone)
+    if running:
+        status = f"Running now · next: {upcoming}"
+    else:
+        status = f"Next: {upcoming} · drafts wait for your OK"
+    return (
+        f"{header(persona)}🔁 <b>{title}</b>\n{text(cadence_words(schedule))}\n"
+        f"<i>{text(status)}</i>"
+    )
+
+def schedule_keyboard(schedule: Schedule, running: bool = False) -> Keyboard:
+    key = schedule.schedule_id
+    if not schedule.active:
+        return [[Button("↻ Turn back on", f"{TURN_ON}:{key}")]]
+    stop = Button("■ Stop", f"{STOP}:{key}")
+    return [[stop]] if running else [[Button("▶ Run now", f"{RUN_NOW}:{key}"), stop]]
 
 def error_text(event: Error) -> str:
     body = f"⚠️ {text(event.message)}"
