@@ -112,13 +112,15 @@ entry ─▶ revise input? ──yes──────────────�
 
 Business onboarding, until `Store.get_profile(...)` returns a profile:
 
-1. Optionally fetch the website (`Tools.fetch_page`) and extract prefill answers.
+1. The first question is fixed text (no LLM): business name, what they sell, and "paste your website".
 2. Loop:
-   - **Ask:** the LLM asks one or two questions in the chief-of-staff persona, targeting the fields still missing.
-   - **Extract:** LLM structured output pulls fields from the reply into a partial `BusinessProfile` (kept in state).
-   - **Check:** `decide("is this answer clear enough?")` for ambiguous answers → follow-up question.
-   - **Completeness** is plain code: all required fields filled.
+   - **Ask:** the LLM asks one or two questions in the chief-of-staff persona, targeting the fields still missing (a fixed fallback question if it fails). Question and wait are separate nodes (interrupt rule).
+   - **Extract:** any links in the answer are fetched (`Tools.fetch_page`, max 2). LLM structured output pulls *every* field the answer or the website supports into a partial profile (kept in state); links are kept.
+   - **Check:** `decide("answer_clear")`; an unclear answer that taught nothing → the next question is a follow-up.
+   - **Completeness** is plain code: name, what they sell and customers filled, and tone either given, asked once, or 8 turns used.
 3. Save the profile and save extra things learned as business-wide `fact` lessons. Yield `OnboardingComplete(scope="business")`.
+
+Measured on Oct 8: pasting a website link fills the whole profile in one answer (name, offer, customers, prices, tone, named clients) once the extraction prompt asks for every field the website supports.
 
 After onboarding, a message in the General topic gets one chief-of-staff `Say` (short answer, suggests hiring a team). Nothing more for the hackathon.
 

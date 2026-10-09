@@ -10,6 +10,7 @@ from brain.flows.approvals import resolve_approval
 from brain.flows.hire import hire_team
 from brain.flows.promotion import respond_promotion
 from brain.flows.undo import undo_action
+from brain.graphs.company import CHIEF_OF_STAFF, build_company_graph
 from brain.graphs.team import TeamState, build_team_graph, new_request
 from brain.helpers.jev import Jev, OpenRouterJev
 from brain.helpers.llm import LLM, OpenRouterLLM
@@ -23,6 +24,7 @@ from contract import (
     Event,
     IncomingMessage,
     PromotionResponse,
+    Say,
     Store,
     Team,
     TeamHired,
@@ -42,12 +44,14 @@ class TenureBrain:
         self.deps = deps
         self.checkpointer = checkpointer or InMemorySaver()
         self.team_graph = build_team_graph(deps, self.checkpointer, learn=self._learn_from_chat)
+        self.company_graph = build_company_graph(deps, self.checkpointer)
 
     def list_templates(self) -> list[TemplateInfo]:
         return [template_info(template) for template in self.deps.templates.values()]
 
     async def start_onboarding(self, business_id: str) -> AsyncIterator[Event]:
-        yield Error(team_id=None, message="Business onboarding isn't ready yet.", recoverable=True)
+        async for event in guarded(self._start(business_id)):
+            yield event
 
     async def handle_message(self, msg: IncomingMessage) -> AsyncIterator[Event]:
         async for event in guarded(self._handle(msg), team_id=msg.team_id):
@@ -74,11 +78,8 @@ class TenureBrain:
 
     async def _handle(self, msg: IncomingMessage) -> AsyncIterator[Event]:
         if msg.team_id is None:
-            yield Error(
-                team_id=None,
-                message="I can't take company-wide requests yet. Write in a team's topic.",
-                recoverable=True,
-            )
+            async for event in self._company(msg):
+                yield event
             return
         team = await self.deps.store.get_team(msg.team_id)
         if team is None or team.business_id != msg.business_id:
@@ -145,16 +146,48 @@ class TenureBrain:
             yield event
 
     def _config(self, team: Team) -> dict:
-        return {
-            "configurable": {"thread_id": f"{team.business_id}:{team.team_id}"},
-            "recursion_limit": RECURSION_LIMIT,
-        }
+        return _thread(f"{team.business_id}:{team.team_id}")
 
     async def _run(self, team: Team, payload) -> AsyncIterator[Event]:
-        stream = self.team_graph.astream(
-            payload, self._config(team), stream_mode=["custom", "updates"]
-        )
-        async for mode, chunk in stream:
+        async for event in _stream(self.team_graph, self._config(team), payload):
+            yield event
+
+    async def _start(self, business_id: str) -> AsyncIterator[Event]:
+        profile = await self.deps.store.get_profile(business_id)
+        if profile is not None:
+            yield Say(
+                team_id=None,
+                persona=CHIEF_OF_STAFF,
+                text=(
+                    f"We're already set up for {profile.name}. Ask me anything here, or hire a "
+                    "team with /hire."
+                ),
+            )
+            return
+        payload = {"business_id": business_id, "restart": True, "message": None}
+        async for event in _stream(self.company_graph, _thread(f"{business_id}:company"), payload):
+            yield event
+
+    async def _company(self, msg: IncomingMessage) -> AsyncIterator[Event]:
+        config = _thread(f"{msg.business_id}:company")
+        snapshot = await self.company_graph.aget_state(config)
+        if snapshot.interrupts:
+            payload = Command(resume=msg.text)
+        else:
+            payload = {"business_id": msg.business_id, "restart": False, "message": msg.text}
+        async for event in _stream(self.company_graph, config, payload):
+            yield event
+
+def _thread(thread_id: str) -> dict:
+    return {"configurable": {"thread_id": thread_id}, "recursion_limit": RECURSION_LIMIT}
+
+async def _stream(graph, config: dict, payload) -> AsyncIterator[Event]:
+    """
+    Runs a graph and turns its stream into contract Events: custom chunks are Events already;
+    an interrupt carries the Ask that ends the stream.
+    """
+    stream = graph.astream(payload, config, stream_mode=["custom", "updates"])
+    async for mode, chunk in stream:
             if mode == "custom":
                 yield chunk
             elif "__interrupt__" in chunk:
