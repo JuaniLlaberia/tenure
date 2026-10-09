@@ -4,7 +4,7 @@ from typing import Literal
 from langgraph.checkpoint.memory import InMemorySaver
 from langgraph.types import Command
 
-from brain.common import guarded
+from brain.common import guarded, utcnow
 from brain.deps import Deps, Settings
 from brain.flows.approvals import resolve_approval
 from brain.flows.hire import hire_team
@@ -16,6 +16,7 @@ from brain.helpers.jev import Jev, OpenRouterJev
 from brain.helpers.llm import LLM, OpenRouterLLM
 from brain.learning import learn
 from brain.templates.loader import load_templates, template_info
+from brain.usage import MeteredJev, MeteredLLM, UsageLog, enter
 from contract import (
     Approval,
     ApprovalDecision,
@@ -50,18 +51,22 @@ class TenureBrain:
         return [template_info(template) for template in self.deps.templates.values()]
 
     async def start_onboarding(self, business_id: str) -> AsyncIterator[Event]:
+        enter(business_id)
         async for event in guarded(self._start(business_id)):
             yield event
 
     async def handle_message(self, msg: IncomingMessage) -> AsyncIterator[Event]:
+        enter(msg.business_id, msg.team_id)
         async for event in guarded(self._handle(msg), team_id=msg.team_id):
             yield event
 
     async def hire_team(self, business_id: str, template: str) -> AsyncIterator[Event]:
+        enter(business_id)
         async for event in guarded(self._hire(business_id, template)):
             yield event
 
     async def resolve_approval(self, decision: ApprovalDecision) -> AsyncIterator[Event]:
+        enter(decision.business_id)
         stream = resolve_approval(
             self.deps, decision, learn=self._learn_from_approval, revise=self._revise
         )
@@ -69,10 +74,12 @@ class TenureBrain:
             yield event
 
     async def respond_promotion(self, response: PromotionResponse) -> AsyncIterator[Event]:
+        enter(response.business_id, response.team_id)
         async for event in respond_promotion(self.deps, response):
             yield event
 
     async def undo_action(self, business_id: str, action_id: str) -> AsyncIterator[Event]:
+        enter(business_id)
         async for event in undo_action(self.deps, business_id, action_id):
             yield event
 
@@ -122,6 +129,7 @@ class TenureBrain:
     async def _learn_from_approval(
         self, approval: Approval, source: Literal["edit", "reject"], feedback: str
     ) -> AsyncIterator[Event]:
+        enter(approval.business_id, approval.team_id)
         team = await self.deps.store.get_team(approval.team_id)
         stream = learn(
             self.deps,
@@ -137,6 +145,7 @@ class TenureBrain:
             yield event
 
     async def _revise(self, approval: Approval, reason: str) -> AsyncIterator[Event]:
+        enter(approval.business_id, approval.team_id)
         team = await self.deps.store.get_team(approval.team_id)
         payload = {
             **new_request(team, "", None),
@@ -207,11 +216,12 @@ def create_brain(
     What the app calls: real OpenRouter clients by default, settings from the environment.
     """
     settings = settings or Settings.from_env()
+    usage = UsageLog(store, settings, utcnow)
     deps = Deps(
         store=store,
         tools=tools,
-        llm=llm or OpenRouterLLM(settings),
-        jev=jev or OpenRouterJev(settings),
+        llm=MeteredLLM(llm or OpenRouterLLM(settings), usage),
+        jev=MeteredJev(jev or OpenRouterJev(settings), usage),
         settings=settings,
         templates=load_templates(),
     )

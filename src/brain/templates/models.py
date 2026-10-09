@@ -14,6 +14,7 @@ class LeadSpec(BaseModel):
 class SpecialistSpec(BaseModel):
     persona: Persona
     tools: list[str] = []
+    instructions: str = ""
 
 class TaskTypeSpec(BaseModel):
     description: str
@@ -41,6 +42,7 @@ class Template(BaseModel):
     specialists: dict[str, SpecialistSpec]
     task_types: dict[str, TaskTypeSpec]
     onboarding: dict[str, OnboardingQuestion] = {}
+    channel_question: OnboardingQuestion | None = None
     limits: Limits = Limits()
 
     @field_validator("onboarding", mode="before")
@@ -57,6 +59,12 @@ class Template(BaseModel):
     def max_level(self, task_type: str) -> AutonomyLevel:
         spec = self.task_types[task_type]
         return spec.max_level or spec.start_level
+
+    def channel_task_types(self) -> list[str]:
+        """
+        Task types that go out somewhere (they have an action), like a post or an email.
+        """
+        return [name for name, spec in self.task_types.items() if spec.action]
 
     def personas(self) -> list[Persona]:
         return [self.lead.persona] + [spec.persona for spec in self.specialists.values()]

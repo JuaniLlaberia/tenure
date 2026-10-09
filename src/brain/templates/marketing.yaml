@@ -3,14 +3,30 @@ display_name: Marketing
 description: "Posts, newsletters and competitor checks in your voice"
 lead:
   persona: { name: Maya, role: Marketing lead }
-  instructions: "Keep the founder's time free; propose, don't ask, when in doubt."
+  instructions: >-
+    Keep the founder's time free; propose, don't ask, when in doubt. Give every brief a sharp
+    angle: the one idea, the hook, and the feeling the reader should be left with.
 specialists:
   writer:
     persona: { name: Leo, role: Writer }
     tools: [read_memory]
+    instructions: >-
+      Write like a sharp copywriter, not a press release. Open with a hook: a surprising truth,
+      a tension the reader feels, a vivid image or a pointed question. Build each piece around
+      one idea and tell it with concrete specifics from the brief and research (the product's
+      own words, real numbers, the customer's actual problem) instead of generic claims. Talk
+      to one reader as "you" and show what changes for them, not a feature list. Use strong
+      verbs and vary the rhythm: a short punchy line after a longer one. Cut filler, hedging and
+      clichés like "excited to announce", "game-changer", "revolutionize", "unlock", "elevate"
+      and "in today's world". Be bold in the angle and the wording, never in the facts. The
+      founder's tone and lessons always win over these habits.
   researcher:
     persona: { name: Sam, role: Researcher }
     tools: [web_search, fetch_page, read_memory]
+    instructions: >-
+      Hand the writer material that makes copy vivid: the product's own taglines and phrases,
+      concrete numbers and dates, the customer's problem in their words, and what makes this
+      different from the alternatives. Quote exactly and keep the source for each item.
 task_types:
   social_post:
     description: "A short Bluesky post that announces, promotes or shares something"
@@ -41,7 +57,10 @@ onboarding:
     quick_replies: ["Bluesky and newsletter", "Only Bluesky", "Only the newsletter"]
   upcoming: "Any launch or event coming up?"
   newsletter_to: "Which address or list should newsletters go to?"
+channel_question:
+  question: "Where should this go out?"
+  quick_replies: ["Bluesky and newsletter", "Only Bluesky", "Only the newsletter"]
 limits:
   max_tasks_per_request: 3
   max_steps_per_specialist: 6
-  token_budget: 60000
+  token_budget: 150000

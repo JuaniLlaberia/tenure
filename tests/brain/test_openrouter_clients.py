@@ -30,17 +30,20 @@ JEV_RESPONSE = {
 class Capital(BaseModel):
     city: str
 
-def chat_response(content=None, tool_calls=None, total_tokens=8):
+def chat_response(content=None, tool_calls=None, total_tokens=8, cost=None):
     message = {"role": "assistant", "content": content}
     if tool_calls:
         message["tool_calls"] = tool_calls
+    usage = {"prompt_tokens": 5, "completion_tokens": 3, "total_tokens": total_tokens}
+    if cost is not None:
+        usage["cost"] = cost
     return {
         "id": "gen-1",
         "object": "chat.completion",
         "created": 0,
         "model": "deepseek/deepseek-v4-flash-0731",
         "choices": [{"index": 0, "message": message, "finish_reason": "stop"}],
-        "usage": {"prompt_tokens": 5, "completion_tokens": 3, "total_tokens": total_tokens},
+        "usage": usage,
     }
 
 def llm_with(responses, requests):
@@ -75,6 +78,8 @@ async def test_jev_request_and_response():
     assert response.answers["route"].choice == "social_post"
     assert response.answers["route"].confidence == 0.98
     assert response.input_tokens == 382
+    assert response.output_tokens == 57
+    assert response.cost == 0.000016044
 
 async def test_jev_http_error_raises_without_leaking_key():
     jev = OpenRouterJev(
@@ -138,14 +143,16 @@ async def test_llm_structured_retries_once_on_invalid_json():
     requests = []
     llm = llm_with(
         [
-            (200, chat_response(content="Paris!", total_tokens=8)),
-            (200, chat_response(content='{"city": "Paris"}', total_tokens=9)),
+            (200, chat_response(content="Paris!", total_tokens=8, cost=0.001)),
+            (200, chat_response(content='{"city": "Paris"}', total_tokens=9, cost=0.002)),
         ],
         requests,
     )
     result = await llm.structured("m", MESSAGES, Capital)
     assert result.value == Capital(city="Paris")
     assert result.tokens == 17
+    assert (result.usage.input_tokens, result.usage.output_tokens) == (10, 6)
+    assert result.usage.cost == pytest.approx(0.003)
     assert len(requests) == 2
 
 async def test_llm_structured_raises_after_second_failure():

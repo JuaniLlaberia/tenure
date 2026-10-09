@@ -25,6 +25,7 @@ class SpecialistState(TypedDict, total=False):
     specialist_id: str
     persona: Persona
     tool_names: list[str]
+    instructions: str
     output: str
     brief: str
     context: str
@@ -63,6 +64,7 @@ def build_specialist_graph(deps: Deps) -> CompiledStateGraph:
             brief,
             state.get("context", ""),
             OUTPUTS[state["output"]].guidance,
+            state.get("instructions", ""),
         )
         return {"messages": messages, "pending": [], "steps": 0, "tokens": 0, "result": None}
 

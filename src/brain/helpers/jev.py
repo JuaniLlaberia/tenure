@@ -16,6 +16,8 @@ class JevAnswer(BaseModel):
 class JevResponse(BaseModel):
     answers: dict[str, JevAnswer]
     input_tokens: int = 0
+    output_tokens: int = 0
+    cost: float | None = None
 
 class JevError(Exception):
     pass
@@ -56,9 +58,13 @@ class OpenRouterJev:
             data = response.json()
         except ValueError as error:
             raise JevError("Jev returned invalid JSON") from error
+        usage = data.get("usage") or {}
+        cost = usage.get("cost")
         return JevResponse(
             answers=_parse_answers(data.get("answers") or {}),
-            input_tokens=(data.get("usage") or {}).get("input_tokens", 0),
+            input_tokens=usage.get("input_tokens", 0),
+            output_tokens=usage.get("output_tokens", 0),
+            cost=float(cost) if cost is not None else None,
         )
 
 def _parse_answers(raw: dict) -> dict[str, JevAnswer]:

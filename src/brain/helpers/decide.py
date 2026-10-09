@@ -116,7 +116,7 @@ async def _ask_jev(
         decision = _from_jev(question, response.answers.get(key))
         if decision is not None:
             answers[key] = decision
-    return answers, response.input_tokens
+    return answers, response.input_tokens + response.output_tokens
 
 async def _ask_llm(
     deps: Deps, questions: dict[str, Question], state: str

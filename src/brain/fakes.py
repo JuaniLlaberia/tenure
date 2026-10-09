@@ -14,6 +14,7 @@ from contract import (
     AuditEntry,
     BusinessProfile,
     Lesson,
+    ModelUsage,
     PageContent,
     SearchResult,
     Task,
@@ -40,6 +41,7 @@ class InMemoryStore:
         self.approvals: dict[str, Approval] = {}
         self.lessons: dict[str, Lesson] = {}
         self.audit: dict[str, AuditEntry] = {}
+        self.usage: list[ModelUsage] = []
 
     async def get_profile(self, business_id: str) -> BusinessProfile | None:
         return _copy(self.profiles.get(business_id))
@@ -107,6 +109,9 @@ class InMemoryStore:
 
     async def get_action(self, action_id: str) -> AuditEntry | None:
         return _copy(self.audit.get(action_id))
+
+    async def log_usage(self, usage: ModelUsage) -> None:
+        self.usage.append(_copy(usage))
 
 class FakeTools:
     """

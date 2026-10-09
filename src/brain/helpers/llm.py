@@ -1,6 +1,6 @@
 import json
 import re
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any, Generic, Protocol, TypeVar
 
 import httpx
@@ -24,15 +24,34 @@ class ToolCall(BaseModel):
     name: str
     arguments: dict
 
+class Usage(BaseModel):
+    """
+    What one call (or a structured call with its retry) used. `cost` is what OpenRouter billed.
+    """
+
+    input_tokens: int = 0
+    output_tokens: int = 0
+    cost: float | None = None
+
+    def __add__(self, other: "Usage") -> "Usage":
+        costs = [c for c in (self.cost, other.cost) if c is not None]
+        return Usage(
+            input_tokens=self.input_tokens + other.input_tokens,
+            output_tokens=self.output_tokens + other.output_tokens,
+            cost=sum(costs) if costs else None,
+        )
+
 class Completion(BaseModel):
     text: str | None
     tool_calls: list[ToolCall] = []
     tokens: int = 0
+    usage: Usage = Usage()
 
 @dataclass
 class Structured(Generic[T]):
     value: T
     tokens: int
+    usage: Usage = field(default_factory=Usage)
 
 class LLMError(Exception):
     pass
@@ -92,7 +111,12 @@ class OpenRouterLLM:
             ToolCall(id=call.id, name=call.function.name, arguments=_parse_arguments(call))
             for call in message.tool_calls or []
         ]
-        return Completion(text=message.content, tool_calls=tool_calls, tokens=_tokens(response))
+        return Completion(
+            text=message.content,
+            tool_calls=tool_calls,
+            tokens=_tokens(response),
+            usage=_usage(response),
+        )
 
     async def structured(
         self, model: str, messages: list[Message], schema: type[T], reasoning: bool | None = None
@@ -101,12 +125,13 @@ class OpenRouterLLM:
             "type": "json_schema",
             "json_schema": {"name": schema.__name__, "schema": schema.model_json_schema()},
         }
-        tokens = 0
+        tokens, usage = 0, Usage()
         for _ in range(2):
             response = await self._create(
                 model, messages, reasoning, response_format=response_format
             )
             tokens += _tokens(response)
+            usage += _usage(response)
             content = response.choices[0].message.content or ""
             try:
                 value = schema.model_validate_json(_strip_fences(content))
@@ -118,7 +143,7 @@ class OpenRouterLLM:
                     {"role": "user", "content": retry},
                 ]
                 continue
-            return Structured(value=value, tokens=tokens)
+            return Structured(value=value, tokens=tokens, usage=usage)
         raise LLMError(f"{model} returned invalid {schema.__name__} twice")
 
     def _body(self, reasoning: bool | None) -> dict[str, Any] | None:
@@ -154,6 +179,17 @@ def _parse_arguments(call) -> dict:
 
 def _tokens(response) -> int:
     return response.usage.total_tokens if response.usage else 0
+
+def _usage(response) -> Usage:
+    usage = response.usage
+    if usage is None:
+        return Usage()
+    cost = (usage.model_extra or {}).get("cost")
+    return Usage(
+        input_tokens=usage.prompt_tokens or 0,
+        output_tokens=usage.completion_tokens or 0,
+        cost=float(cost) if cost is not None else None,
+    )
 
 def _strip_fences(content: str) -> str:
     match = re.search(r"```(?:json)?\s*(.*?)```", content, re.DOTALL)

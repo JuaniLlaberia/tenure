@@ -3,6 +3,7 @@ from brain.deps import Settings
 from brain.fakes import FakeJev, FakeLLM, FakeTools, InMemoryStore
 from brain.helpers.jev import OpenRouterJev
 from brain.helpers.llm import OpenRouterLLM
+from brain.usage import MeteredJev, MeteredLLM
 from contract import (
     ActionDone,
     ApprovalDecision,
@@ -127,5 +128,5 @@ async def test_create_brain_builds_from_env():
     assert [t.name for t in brain.list_templates()] == ["marketing"]
 
     real = create_brain(store, tools, settings=Settings())
-    assert isinstance(real.deps.llm, OpenRouterLLM)
-    assert isinstance(real.deps.jev, OpenRouterJev)
+    assert isinstance(real.deps.llm, MeteredLLM) and isinstance(real.deps.llm._llm, OpenRouterLLM)
+    assert isinstance(real.deps.jev, MeteredJev) and isinstance(real.deps.jev._jev, OpenRouterJev)
