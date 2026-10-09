@@ -501,6 +501,7 @@ function renderInbox(force = false) {
   if (!ui.selected && drafts.length) ui.selected = drafts[0].approval_id;
   if (!drafts.length) {
     $("list").innerHTML = "";
+    $("review").dataset.shows = "";
     $("review").innerHTML = `<p class="empty">Nothing waiting. New drafts appear here as soon as a team finishes them.</p>`;
     return;
   }
@@ -515,11 +516,13 @@ function renderInbox(force = false) {
       </span>
     </button>`).join("");
   const focused = $("review").contains(document.activeElement);
-  if (force || !focused) renderReview();
+  const stale = $("review").dataset.shows !== ui.selected;
+  if (force || stale || !focused) renderReview();
 }
 
 function renderReview() {
   const d = currentDraft();
+  $("review").dataset.shows = d ? d.approval_id : "";
   if (!d) { $("review").innerHTML = ""; return; }
   const id = d.approval_id;
   const busy = ui.busy.has(id) ? "disabled" : "";
