@@ -6,6 +6,8 @@ Start with: uv run --env-file .env python -m app.main
 import asyncio
 import logging
 import os
+from collections.abc import AsyncIterator
+from contextlib import asynccontextmanager
 
 import uvicorn
 from telegram import Update
@@ -17,6 +19,10 @@ from app.store.memory import InMemoryStore
 from app.store.supabase_store import SupabaseStore
 from app.tools.real import RealTools
 from app.web.api import create_api
+from brain.brain import create_brain
+from brain.checkpoint import open_checkpointer
+from brain.deps import Settings
+from contract import Brain, Tools
 
 logger = logging.getLogger(__name__)
 
@@ -38,13 +44,33 @@ def make_store() -> AppStore:
     logger.warning("SUPABASE_URL or SUPABASE_SERVICE_KEY not set: data stays in memory")
     return InMemoryStore()
 
+@asynccontextmanager
+async def open_brain(store: AppStore, tools: Tools) -> AsyncIterator[Brain]:
+    """
+    Juan's brain when OPENROUTER_API_KEY is set, with its LangGraph checkpointer on
+    DATABASE_URL (in memory without it). Otherwise the fake brain, so the app still runs.
+    """
+    settings = Settings.from_env(os.environ)
+    if settings.openrouter_api_key is None:
+        logger.warning("OPENROUTER_API_KEY not set: using the fake brain")
+        yield FakeBrain(store, tools=tools, delay=0.8)
+        return
+    if settings.database_url is None:
+        logger.warning("DATABASE_URL not set: brain conversations are lost on restart")
+    async with open_checkpointer(settings) as checkpointer:
+        logger.info("Using the real brain")
+        yield create_brain(store, tools, settings, checkpointer)
+
 async def run(token: str) -> None:
+    store = make_store()
+    tools = RealTools.from_env()
+    async with open_brain(store, tools) as brain:
+        await serve(token, brain, store, tools)
+
+async def serve(token: str, brain: Brain, store: AppStore, tools: RealTools) -> None:
     host = os.environ.get("DASHBOARD_HOST", "127.0.0.1")
     port = int(os.environ.get("PORT", "8000"))
     dashboard_url = os.environ.get("DASHBOARD_URL", f"http://localhost:{port}")
-    store = make_store()
-    tools = RealTools.from_env()
-    brain = FakeBrain(store, tools=tools, delay=0.8)
     application, flows = build_application(token, brain, store, dashboard_url)
     api = create_api(flows, store, brain)
     server = uvicorn.Server(uvicorn.Config(api, host=host, port=port, log_level="warning"))

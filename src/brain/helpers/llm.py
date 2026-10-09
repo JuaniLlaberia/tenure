@@ -60,7 +60,14 @@ class OpenRouterLLM:
             timeout=settings.llm_timeout,
             http_client=http_client,
         )
-        self._extra = {} if settings.llm_reasoning else {"reasoning": {"enabled": False}}
+        self._extra: dict[str, Any] = (
+            {} if settings.llm_reasoning else {"reasoning": {"enabled": False}}
+        )
+        if settings.openrouter_provider:
+            self._extra["provider"] = {
+                "only": [settings.openrouter_provider],
+                "allow_fallbacks": False,
+            }
 
     async def complete(
         self, model: str, messages: list[Message], tools: list[ToolDef] | None = None
