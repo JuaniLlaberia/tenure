@@ -8,8 +8,14 @@ dependencies = [
     "atproto>=0.0.72",
     "fastapi>=0.143.0",
     "httpx>=0.28.1",
+    "langgraph>=1.2.14",
+    "langgraph-checkpoint-postgres>=3.1.2",
+    "openai>=3.26.1",
+    "psycopg[binary]>=3.3.6",
     "pydantic>=2.13.5",
+    "python-dotenv>=1.2.4",
     "python-telegram-bot>=22.8",
+    "pyyaml>=6.0.3",
     "supabase>=2.32.0",
     "uvicorn>=0.54.0",
 ]
@@ -31,7 +37,8 @@ packages = ["src/contract", "src/brain", "src/app"]
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 asyncio_mode = "auto"
-addopts = "--import-mode=importlib"
+addopts = "--import-mode=importlib -m 'not live'"
+markers = ["live: calls real OpenRouter models (needs OPENROUTER_API_KEY)"]
 
 [tool.ruff]
 line-length = 100

@@ -1,0 +1,45 @@
+name: marketing
+display_name: Marketing
+description: "Posts, newsletters and competitor checks in your voice"
+lead:
+  persona: { name: Maya, role: Marketing lead }
+  instructions: "Keep the founder's time free; propose, don't ask, when in doubt."
+specialists:
+  writer:
+    persona: { name: Leo, role: Writer }
+    tools: [read_memory]
+  researcher:
+    persona: { name: Sam, role: Researcher }
+    tools: [web_search, fetch_page, read_memory]
+task_types:
+  social_post:
+    description: "A short Bluesky post that announces, promotes or shares something"
+    steps: [writer]
+    output: social_post
+    check: ["matches the business tone", "no invented facts or prices"]
+    action: post_social
+    start_level: act_after_approval
+    max_level: autonomous
+  newsletter:
+    description: "An email newsletter to the founder's list that announces or promotes something"
+    steps: [researcher, writer]
+    output: email
+    check: ["clear subject line", "one call to action"]
+    action: send_email
+    start_level: act_after_approval
+    max_level: act_and_report
+  competitor_check:
+    description: "Research on what competitors are doing lately"
+    steps: [researcher]
+    output: report
+    check: ["every claim has a source"]
+    action: null
+    start_level: act_and_report
+onboarding:
+  channels: "Which channels do you post on?"
+  upcoming: "Any launch or event coming up?"
+  newsletter_to: "Which address or list should newsletters go to?"
+limits:
+  max_tasks_per_request: 3
+  max_steps_per_specialist: 6
+  token_budget: 60000
