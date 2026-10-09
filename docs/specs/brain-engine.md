@@ -149,7 +149,7 @@ Independent: it never reuses the lead's or the specialist's prompt.
 Load the approval and check it's pending (otherwise a recoverable `Error`). Then branch on the decision table in CONTRACT §7:
 
 - **approve:** execute the action (if any), log it, update trust, run the promotion rule (§6.4), have the lead confirm with a `Say`. Task → `DONE`.
-- **edit:** execute with the edited text, update trust, REFLECT on (original, edited). Task → `DONE`.
+- **edit:** execute the founder's version, update trust, REFLECT on (original, edited). Task → `DONE`. Since contract v0.4 the founder's version is `edited_action` when the app sends one (an email with a new subject or recipient); it must have the draft's `tool`, otherwise a recoverable `Error`. Without it, the planned action with `edited_text`. REFLECT sees the whole edited email.
 - **reject:** update trust. With a reason: REFLECT on it, and if revisions are left, re-enter the team graph for that `task_id` with `{"revise": task_id, "feedback": reason}`; the entry router sends it straight to DISPATCH, which reruns the last step, then CHECK and GATE. Without a reason: task → `REJECTED`.
 
 ### 6.2 `respond_promotion`

@@ -74,7 +74,7 @@ async def _resolve(
     if decision.decision == "approve":
         steps = _approve(deps, ctx)
     elif decision.decision == "edit":
-        steps = _edit(deps, ctx, decision.edited_text, learn)
+        steps = _edit(deps, ctx, decision.edited_text, decision.edited_action, learn)
     else:
         steps = _reject(deps, ctx, (decision.reason or "").strip(), learn, revise)
     async for event in steps:
@@ -144,10 +144,28 @@ async def _approve(deps: Deps, ctx: Context) -> AsyncIterator[Event]:
         )
 
 async def _edit(
-    deps: Deps, ctx: Context, edited_text: str | None, learn: LearnHook | None
+    deps: Deps,
+    ctx: Context,
+    edited_text: str | None,
+    edited_action: PlannedAction | None,
+    learn: LearnHook | None,
 ) -> AsyncIterator[Event]:
+    """
+    Contract v0.4: `edited_action`, when given, is the founder's whole version (an email's new
+    subject and recipient too) and wins over `edited_text`. A draft without an action ignores it.
+    """
     approval = ctx.approval
-    text = (edited_text or "").strip()
+    planned = approval.planned_action
+    if planned is None or edited_action is None:
+        edited_action = None
+    elif edited_action.tool != planned.tool:
+        yield Error(
+            team_id=approval.team_id,
+            message="That edit doesn't match this draft. Try editing it again.",
+            recoverable=True,
+        )
+        return
+    text = (_text_of(edited_action) if edited_action else edited_text or "").strip()
     if not text:
         yield Error(
             team_id=approval.team_id,
@@ -161,7 +179,7 @@ async def _edit(
         )
         yield Error(team_id=approval.team_id, message=message, recoverable=True)
         return
-    action = _edited_action(approval.planned_action, text)
+    action = edited_action or _edited_action(planned, text)
     if action is not None:
         outcome = await execute_action(
             deps, ctx.task, action, approval_id=approval.approval_id, autonomous=False
@@ -177,7 +195,7 @@ async def _edit(
     await _save_task(deps, ctx.task, TaskStatus.DONE)
     await deps.store.set_trust(reset_streak(ctx.trust, now))
     if learn is not None:
-        feedback = f"Original:\n{approval.preview}\n\nEdited:\n{text}"
+        feedback = f"Original:\n{approval.preview}\n\nEdited:\n{_show(action, text)}"
         async for event in learn(edited, "edit", feedback):
             yield event
     yield Say(
@@ -193,6 +211,17 @@ def _edited_action(action: PlannedAction | None, text: str) -> PlannedAction | N
     if isinstance(action, SendEmail):
         return action.model_copy(update={"body": text})
     return None
+
+def _text_of(action: PlannedAction) -> str:
+    return action.text if isinstance(action, PostSocial) else action.body
+
+def _show(action: PlannedAction | None, text: str) -> str:
+    """
+    The founder's version as reflect should see it: the whole email, not just its body.
+    """
+    if isinstance(action, SendEmail):
+        return f"To: {action.to}\nSubject: {action.subject}\n\n{action.body}"
+    return text
 
 async def _reject(
     deps: Deps,
