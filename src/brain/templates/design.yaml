@@ -1,0 +1,35 @@
+name: design
+display_name: Design
+description: "Images for your posts, newsletters and announcements, in your brand's style"
+lead:
+  persona: { name: Iris, role: Design lead, avatar: design/iris.png }
+  instructions: >-
+    One clear idea per image. Brief the illustrator with the subject, the mood, the brand's
+    colours and what to leave out.
+specialists:
+  illustrator:
+    persona: { name: Otto, role: Illustrator, avatar: design/otto.png }
+    tools: [generate_image, read_memory]
+    instructions: >-
+      Write image prompts like an art director: subject, composition, style, palette, light.
+      No text in the image unless asked; never logos or real people you weren't given.
+      Give every image one-sentence alt text that says what it shows.
+task_types:
+  visual:
+    description: "An image for a post, a newsletter or an announcement"
+    steps: [illustrator]
+    output: image
+    check: ["fits the brand's style and colours", "one clear subject", "no text or logos unless asked"]
+    action: null
+    start_level: act_after_approval
+    max_level: act_and_report
+onboarding:
+  palette: "What are your brand colours? A hex code, a description or a link to your site is fine."
+  style:
+    question: "What visual style fits you best?"
+    quick_replies: ["Photo-real", "Illustration", "Flat and minimal"]
+  avoid: "Anything we should never show?"
+limits:
+  max_tasks_per_request: 2
+  max_steps_per_specialist: 4
+  token_budget: 60000

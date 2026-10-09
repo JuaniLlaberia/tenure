@@ -20,11 +20,20 @@ from brain.prompts.chief_of_staff import (
     reply_messages,
 )
 from brain.reasoning import needs_reasoning
-from contract import Ask, BusinessProfile, Event, Lesson, OnboardingComplete, Persona, Say
+from contract import (
+    Ask,
+    BusinessProfile,
+    Event,
+    Lesson,
+    OnboardingComplete,
+    PageContent,
+    Persona,
+    Say,
+)
 
 log = logging.getLogger(__name__)
 
-CHIEF_OF_STAFF = Persona(name="Alex", role="Chief of staff")
+CHIEF_OF_STAFF = Persona(name="Alex", role="Chief of staff", avatar="company/alex.png")
 REQUIRED = ("name", "what_you_sell", "customers")
 MAX_TURNS = 8
 MAX_PAGES = 2
@@ -45,6 +54,7 @@ class CompanyState(TypedDict, total=False):
     facts: list[str]
     question: str | None
     answer: str | None
+    files: list[dict]
     unclear: bool
     asked_tone: bool
     turns: int
@@ -133,7 +143,10 @@ def build_company_graph(deps: Deps, checkpointer) -> CompiledStateGraph:
 
     async def wait(state: CompanyState) -> dict:
         ask = Ask(team_id=None, persona=CHIEF_OF_STAFF, question=state["question"])
-        return {"answer": str(interrupt(ask.model_dump(mode="json")))}
+        value = interrupt(ask.model_dump(mode="json"))
+        if isinstance(value, dict):
+            return {"answer": str(value.get("text", "")), "files": list(value.get("files", []))}
+        return {"answer": str(value), "files": []}
 
     async def extract(state: CompanyState) -> dict:
         answer = state["answer"]
@@ -143,6 +156,10 @@ def build_company_graph(deps: Deps, checkpointer) -> CompiledStateGraph:
             page = await deps.tools.fetch_page(url)
             if page is not None:
                 pages.append(page)
+        pages.extend(
+            PageContent(url=f"file:{item['title']}", title=item["title"], text=item["text"])
+            for item in state.get("files") or []
+        )
         draft = draft_of(state)
         try:
             result = await deps.llm.structured(

@@ -2,13 +2,13 @@ name: marketing
 display_name: Marketing
 description: "Posts, newsletters and competitor checks in your voice"
 lead:
-  persona: { name: Maya, role: Marketing lead }
+  persona: { name: Maya, role: Marketing lead, avatar: marketing/maya.png }
   instructions: >-
     Keep the founder's time free; propose, don't ask, when in doubt. Give every brief a sharp
     angle: the one idea, the hook, and the feeling the reader should be left with.
 specialists:
   writer:
-    persona: { name: Leo, role: Writer }
+    persona: { name: Leo, role: Writer, avatar: marketing/leo.png }
     tools: [read_memory]
     instructions: >-
       Write like a sharp copywriter, not a press release. Open with a hook: a surprising truth,
@@ -21,7 +21,7 @@ specialists:
       and "in today's world". Be bold in the angle and the wording, never in the facts. The
       founder's tone and lessons always win over these habits.
   researcher:
-    persona: { name: Sam, role: Researcher }
+    persona: { name: Sam, role: Researcher, avatar: marketing/sam.png }
     tools: [web_search, fetch_page, read_memory]
     instructions: >-
       Hand the writer material that makes copy vivid: the product's own taglines and phrases,
@@ -31,6 +31,8 @@ task_types:
   social_post:
     description: "A short Bluesky post that announces, promotes or shares something"
     steps: [writer]
+    with_teams:
+      design: [illustrator]
     output: social_post
     check: ["matches the business tone", "no invented facts or prices"]
     action: post_social
@@ -39,6 +41,8 @@ task_types:
   newsletter:
     description: "An email newsletter to the founder's list that announces or promotes something"
     steps: [researcher, writer]
+    with_teams:
+      design: [illustrator]
     output: email
     check: ["clear subject line", "one call to action"]
     action: send_email

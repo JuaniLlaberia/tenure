@@ -23,11 +23,15 @@ async def execute_action(
     """
     if isinstance(action, PostSocial):
         summary, failure = "Posted to Bluesky", "post to Bluesky"
-        result = await _run(deps.tools.post_social(task.business_id, action.text))
+        result = await _run(
+            deps.tools.post_social(task.business_id, action.text, **_images(action))
+        )
     else:
         summary, failure = f"Sent the email to {action.to}", "send the email"
         result = await _run(
-            deps.tools.send_email(task.business_id, action.to, action.subject, action.body)
+            deps.tools.send_email(
+                task.business_id, action.to, action.subject, action.body, **_images(action)
+            )
         )
     now = deps.clock()
     undoable = action.tool == "post_social" and result.ok
@@ -62,6 +66,12 @@ async def execute_action(
         autonomous=autonomous,
         undo_until=undo_until,
     )
+
+def _images(action: PlannedAction) -> dict:
+    """
+    Images are passed only when there are some, so Tools without image support keep working.
+    """
+    return {"images": action.images} if action.images else {}
 
 async def _run(call) -> ActionResult:
     try:

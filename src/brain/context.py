@@ -1,5 +1,5 @@
 from brain.deps import Deps
-from contract import Approval, BusinessProfile, Lesson
+from contract import Approval, BusinessProfile, FileRef, Lesson
 
 MAX_LESSONS = 20
 MAX_EXAMPLES = 3
@@ -12,10 +12,12 @@ async def build_context(
     task_type: str | None,
     prior_outputs: dict[str, dict] | None = None,
     feedback: list[str] | None = None,
+    photos: list[FileRef] | None = None,
 ) -> str:
     """
     The prompt context every role sees: business profile, lessons, approved examples,
-    earlier steps' outputs and feedback to fix. Empty sections are left out.
+    earlier steps' outputs, the founder's photos it may attach and feedback to fix. Empty
+    sections are left out.
     """
     profile = await deps.store.get_profile(business_id)
     lessons = await deps.store.list_lessons(business_id, team_id, task_type)
@@ -27,6 +29,7 @@ async def build_context(
         lessons_section(lessons),
         examples_section(examples),
         prior_section(prior_outputs or {}),
+        photos_section(photos or []),
         feedback_section(feedback or []),
     ]
     return "\n\n".join(section for section in sections if section)
@@ -62,7 +65,7 @@ def examples_section(approvals: list[Approval]) -> str:
     liked = [a for a in approvals if a.status in ("approved", "edited")][:MAX_EXAMPLES]
     if not liked:
         return ""
-    drafts = [a.edited_text if a.status == "edited" and a.edited_text else a.preview for a in liked]
+    drafts = [_example(a) for a in liked]
     return (
         "Drafts the founder approved (match their style only; their facts and dates may be "
         "out of date):\n" + "\n---\n".join(drafts)
@@ -82,6 +85,27 @@ def prior_section(prior_outputs: dict[str, dict]) -> str:
                 lines.append(f"{key}: {value}")
         parts.append(f"[{specialist_id}]\n" + "\n".join(lines))
     return "Earlier steps of this task:\n" + "\n\n".join(parts)
+
+def _example(approval: Approval) -> str:
+    """
+    One approved draft as the founder last saw it, with what its images showed.
+    """
+    edited = approval.status == "edited" and approval.edited_text
+    text = approval.edited_text if edited else approval.preview
+    action = approval.planned_action
+    files = [*approval.media, *(action.images if action is not None else [])]
+    shown = [file.alt_text for file in files if file.alt_text]
+    return text + (f"\nImages: {'; '.join(shown)}" if shown else "")
+
+def photos_section(photos: list[FileRef]) -> str:
+    photos = [photo for photo in photos if photo.source == "founder"]
+    if not photos:
+        return ""
+    lines = [f"- {photo.file_id}: {photo.alt_text or 'a photo'}" for photo in photos]
+    return (
+        "Photos the founder sent (to use one, put its id in `images`; leave `images` empty if "
+        "none fits):\n" + "\n".join(lines)
+    )
 
 def feedback_section(feedback: list[str]) -> str:
     if not feedback:

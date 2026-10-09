@@ -207,7 +207,7 @@ async def _edit(
 
 def _edited_action(action: PlannedAction | None, text: str) -> PlannedAction | None:
     if isinstance(action, PostSocial):
-        return PostSocial(text=text)
+        return action.model_copy(update={"text": text})
     if isinstance(action, SendEmail):
         return action.model_copy(update={"body": text})
     return None

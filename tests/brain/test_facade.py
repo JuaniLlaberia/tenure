@@ -18,9 +18,9 @@ def of(events, kind):
 
 def test_list_templates(brain):
     templates = brain.list_templates()
-    assert [t.name for t in templates] == ["marketing"]
-    assert isinstance(templates[0], TemplateInfo)
-    assert templates[0].personas[0].name == "Maya"
+    assert [t.name for t in templates] == ["design", "marketing"]
+    assert isinstance(templates[1], TemplateInfo)
+    assert templates[1].personas[0].name == "Maya"
 
 async def test_unknown_team_yields_error(brain, collect, make_team, message):
     team = await make_team()
@@ -125,7 +125,7 @@ async def test_create_brain_builds_from_env():
     brain = create_brain(store, tools, settings=Settings(), llm=FakeLLM(), jev=FakeJev())
     assert isinstance(brain, TenureBrain)
     assert brain.deps.store is store
-    assert [t.name for t in brain.list_templates()] == ["marketing"]
+    assert [t.name for t in brain.list_templates()] == ["design", "marketing"]
 
     real = create_brain(store, tools, settings=Settings())
     assert isinstance(real.deps.llm, MeteredLLM) and isinstance(real.deps.llm._llm, OpenRouterLLM)
