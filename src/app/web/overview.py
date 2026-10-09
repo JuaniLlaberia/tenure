@@ -12,10 +12,12 @@ from contract import (
     AuditEntry,
     AutonomyLevel,
     Brain,
+    FileRef,
     Lesson,
     ModelUsage,
     Persona,
     PostSocial,
+    Schedule,
     SendEmail,
     Task,
     Team,
@@ -49,6 +51,7 @@ async def build_overview(
     business_id: str,
     now: datetime,
     deciding: frozenset[str] = frozenset(),
+    running: frozenset[str] = frozenset(),
 ) -> dict[str, Any]:
     profile = await store.get_profile(business_id)
     templates = {t.name: t for t in brain.list_templates()}
@@ -60,12 +63,18 @@ async def build_overview(
     actions = await store.list_actions(business_id)
     lessons = await store.list_all_lessons(business_id)
     usage = await store.list_usage(business_id, now - WEEK)
+    schedules = await store.list_schedules(business_id)
     titles = {task.task_id: task.title for task in tasks}
+    by_approval = {a.approval_id: a for a in approvals}
+    leads = {
+        team.team_id: templates[team.template].personas[0]
+        for team in teams
+        if team.template in templates and templates[team.template].personas
+    }
     pending = [a for a in approvals if a.status == "pending" and a.approval_id not in deciding]
-    leads = [templates[t.template].personas[0].name for t in teams if t.template in templates]
     return {
         "business": {"name": profile.name if profile else "Your business"},
-        "lead": leads[0] if len(leads) == 1 else None,
+        "lead": next(iter(leads.values())).name if len(leads) == 1 else None,
         "stats": {**_stats(tasks, approvals, actions, usage, now), "waiting": len(pending)},
         "spend": _spend(usage),
         "teams": [await _team(store, team, templates.get(team.template)) for team in teams],
@@ -73,8 +82,11 @@ async def build_overview(
             await _draft(store, a, approvals, team_by_id, templates) for a in pending
         ],
         "tasks": [_task(task, team_names) for task in tasks],
-        "lessons": [_lesson(lesson, team_names) for lesson in lessons],
-        "activity": [_action(a, titles, now) for a in actions if a.tool != "delete_social"],
+        "lessons": [_lesson(lesson, team_names, leads) for lesson in lessons],
+        "activity": [
+            _action(a, titles, now, by_approval) for a in actions if a.tool != "delete_social"
+        ],
+        "schedules": [_schedule(s, team_names, leads, running) for s in schedules],
         "templates": [_template(t, teams) for t in templates.values()],
         "levels": LEVEL_NAMES,
         "promote_after_max": PROMOTE_AFTER_MAX,
@@ -158,7 +170,7 @@ async def _team(store: AppStore, team: Team, template: TemplateInfo | None) -> d
         "name": team.display_name,
         "hired_at": team.created_at,
         "onboarded": team.onboarded,
-        "people": [p.model_dump() for p in template.personas] if template else [],
+        "people": [person(p) for p in template.personas] if template else [],
         "promote_after": max((t.promote_after for t in trust), default=5),
         "trust": [
             {
@@ -190,11 +202,14 @@ async def _draft(
         if a.task_id == approval.task_id and a.status == "rejected" and a.reason
     ]
     action = approval.planned_action
+    images = action.images if action else approval.media
     return {
         "approval_id": approval.approval_id,
         "team_id": approval.team_id,
         "team": team.display_name if team else "",
         "lead": personas[0].name if personas else "The team",
+        "lead_avatar": avatar_url(personas[0]) if personas else None,
+        "images": [_image(ref) for ref in images if ref.kind == "image"],
         "type": ui.task_title(approval.task_type),
         "kind": "post" if isinstance(action, PostSocial) else "email" if action else "draft",
         "title": task.title if task else ui.task_title(approval.task_type),
@@ -212,6 +227,15 @@ async def _draft(
         "promote_after": trust.promote_after if trust else 5,
         "created_at": approval.created_at,
     }
+
+def avatar_url(persona: Persona) -> str | None:
+    return f"/avatars/{persona.avatar}" if persona.avatar else None
+
+def person(persona: Persona) -> dict[str, Any]:
+    return {"name": persona.name, "role": persona.role, "avatar": avatar_url(persona)}
+
+def _image(ref: FileRef) -> dict[str, Any]:
+    return {"file_id": ref.file_id, "alt": ref.alt_text or ref.name or "", "name": ref.name}
 
 def _step(step: str, personas: list[Persona]) -> str:
     for persona in personas[1:]:
@@ -231,10 +255,13 @@ def _task(task: Task, teams: dict[str, str]) -> dict[str, Any]:
         "updated_at": task.updated_at,
     }
 
-def _lesson(lesson: Lesson, teams: dict[str, str]) -> dict[str, Any]:
+def _lesson(lesson: Lesson, teams: dict[str, str], leads: dict[str, Persona]) -> dict[str, Any]:
     team = teams.get(lesson.team_id or "", "One team")
     scope = "All teams" if lesson.team_id is None else f"{team} only"
+    lead = leads.get(lesson.team_id or "")
     return {
+        "team": None if lesson.team_id is None else team,
+        "lead": person(lead) if lead else None,
         "lesson_id": lesson.lesson_id,
         "text": lesson.text,
         "kind": lesson.kind,
@@ -244,9 +271,15 @@ def _lesson(lesson: Lesson, teams: dict[str, str]) -> dict[str, Any]:
         "only": ui.task_title(lesson.task_type) if lesson.task_type else None,
     }
 
-def _action(entry: AuditEntry, titles: dict[str, str], now: datetime) -> dict[str, Any]:
+def _action(
+    entry: AuditEntry, titles: dict[str, str], now: datetime, approvals: dict[str, Approval]
+) -> dict[str, Any]:
     undoable = entry.undo_until is not None and entry.undone_at is None and now <= entry.undo_until
+    approval = approvals.get(entry.approval_id or "")
+    action = approval.planned_action if approval else None
+    images = action.images if action else []
     return {
+        "images": [_image(ref) for ref in images if ref.kind == "image"],
         "action_id": entry.action_id,
         "at": entry.at,
         "summary": entry.summary,
@@ -260,6 +293,26 @@ def _action(entry: AuditEntry, titles: dict[str, str], now: datetime) -> dict[st
         "permanent": entry.undo_until is None,
     }
 
+def _schedule(
+    schedule: Schedule,
+    teams: dict[str, str],
+    leads: dict[str, Persona],
+    running: frozenset[str],
+) -> dict[str, Any]:
+    lead = leads.get(schedule.team_id)
+    return {
+        "schedule_id": schedule.schedule_id,
+        "title": schedule.title,
+        "request": schedule.request,
+        "team": teams.get(schedule.team_id, ""),
+        "lead": person(lead) if lead else None,
+        "cadence": ui.cadence_words(schedule),
+        "next_run_at": schedule.next_run_at if schedule.active else None,
+        "last_run_at": schedule.last_run_at,
+        "active": schedule.active,
+        "running": schedule.schedule_id in running,
+    }
+
 def _template(template: TemplateInfo, teams: list[Team]) -> dict[str, Any]:
     names = [p.name for p in template.personas]
     return {
@@ -267,5 +320,6 @@ def _template(template: TemplateInfo, teams: list[Team]) -> dict[str, Any]:
         "display_name": template.display_name,
         "description": template.description,
         "people": ui.join_names(names),
+        "personas": [person(p) for p in template.personas],
         "hired": any(team.template == template.name for team in teams),
     }
