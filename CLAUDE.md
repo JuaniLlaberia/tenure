@@ -7,6 +7,7 @@ Tenure (working name): solo founders hire AI teams that live in Telegram, learn 
 - `docs/CONTEXT.md`: what we're building and why.
 - `docs/CONTRACT.md`: the interface between `brain` and `app`: what every shared model, field and method means, and the rules. `src/contract/` holds the exact shapes; the two always change together.
 - If a module has a spec in `docs/specs/`, follow it (`docs/specs/brain-engine.md` for the team engine).
+- `docs/ROADMAP.md`: the features being built now (contract v0.6), their order and the brain/app split. Brain work starts from its stage file in `docs/brain/` (stages 10–14).
 
 ## Repo layout and ownership
 

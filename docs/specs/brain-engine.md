@@ -5,6 +5,16 @@ Read [CONTEXT.md](../CONTEXT.md) first. The build plan, one file per stage, live
 
 ## 0. Changelog
 
+**v0.3 (Oct 9), proposed by Mark with contract v0.6, agreed by Juan.** The designs live in the stage files until each stage lands; fold them into the sections below then.
+
+| # | Change | Where |
+| --- | --- | --- |
+| 1 | Attachments become text before TRIAGE (transcripts, descriptions, document text); founder photos can go into posts | [stage 10](../brain/stage-10-attachments.md) |
+| 2 | Image generation (OpenRouter Images API), `generate_image` tool, `image` output, Design template | [stage 11](../brain/stage-11-design-team.md) |
+| 3 | `with_teams`: a task type's extra steps run by another hired team; images merged into the draft | [stage 12](../brain/stage-12-campaign-visuals.md) |
+| 4 | `avatar` on every persona, pictures in `assets/avatars/` | [stage 13](../brain/stage-13-avatars.md) |
+| 5 | Schedules: triage questions, `schedule` and `change_schedule` nodes, `run_schedule` never interrupts | [stage 14](../brain/stage-14-schedules.md) |
+
 **v0.2 (Oct 8)**
 
 | # | Change | Why |
