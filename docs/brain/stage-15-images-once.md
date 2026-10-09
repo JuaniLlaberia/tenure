@@ -1,6 +1,6 @@
 # Stage 15: Images are made once
 
-**Status:** built by Mark on `upgrades-integration` (Oct 9), **needs Juan's review**
+**Status:** built by Mark on `upgrades-integration` (Oct 9), reviewed by Juan (Oct 9)
 **Depends on:** stages 11, 12
 **Spec:** [CONTRACT.md](../CONTRACT.md) v0.7 §7 (`new_image`, "Images are made once")
 
@@ -67,7 +67,7 @@ saw anything, and a text-only rejection threw a good image away.
 
 ## Tests
 
-Frozen tests changed (Juan, please check these four):
+Frozen tests changed (Juan checked these four):
 
 - `test_design.py::test_generate_image_saves_the_file_with_alt_text` → `test_generate_image_only_plans_the_image`
 - `test_design.py::test_image_failure_is_a_tool_error_not_a_crash`: the failure now happens at render, so there's no tool error in the specialist's messages; the draft still fails, recoverably

@@ -52,7 +52,7 @@ For every stage:
 | 12 | [Marketing and design on one campaign](./stage-12-campaign-visuals.md) | 11 | done |
 | 13 | [Avatars](./stage-13-avatars.md) | 11 | done |
 | 14 | [Schedules](./stage-14-schedules.md) | 9 | done |
-| 15 | [Images are made once](./stage-15-images-once.md) | 11, 12 | built by Mark, needs Juan's review |
+| 15 | [Images are made once](./stage-15-images-once.md) | 11, 12 | built by Mark, reviewed by Juan (Oct 9) |
 
 Statuses: `not started` → `tests written` (red, waiting for review) → `tests approved` → `done`.
 

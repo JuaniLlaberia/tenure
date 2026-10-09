@@ -1,4 +1,4 @@
-# Brain ↔ App Contract (v0.7 draft)
+# Brain ↔ App Contract (v0.7)
 
 This is the agreement between the agent brain (`src/brain/`, owner: Juan) and the app (`src/app/`, owner: Mark).
 If both sides respect it, each can be built and tested alone, and they plug together at merge points.
@@ -10,7 +10,7 @@ Both change together: a change to one without the other is a bug, and `tests/con
 
 ## 0. Changelog
 
-**v0.7 (Oct 9), proposed by Mark, needs Juan's OK**
+**v0.7 (Oct 9), proposed by Mark, agreed by Juan.**
 
 | # | Change | Why |
 | --- | --- | --- |
