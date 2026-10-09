@@ -58,6 +58,22 @@ h1, h2, h3 { font-family: var(--font-display); margin: 0; text-wrap: balance; }
 .btn.quiet { border-color: transparent; background: transparent; color: var(--muted); }
 .btn.quiet:hover:not([disabled]) { color: var(--ink); background: var(--sunk); }
 .btn.danger { color: var(--bad); }
+.btn.working { display: inline-flex; align-items: center; gap: 7px; opacity: 1; }
+.spin { display: inline-block; width: 12px; height: 12px; border-radius: 50%; border: 2px solid currentColor; border-right-color: transparent; animation: spin 0.7s linear infinite; flex: none; }
+@keyframes spin { to { transform: rotate(360deg); } }
+@media (prefers-reduced-motion: reduce) { .spin { animation-duration: 2.4s; } }
+.rbody { display: grid; gap: 12px; transition: opacity 0.2s; }
+.review.busy .rbody { opacity: 0.55; }
+.slow { font-size: 12.5px; color: var(--muted); }
+.slow:empty { display: none; }
+.share { display: flex; height: 8px; border-radius: 4px; overflow: hidden; background: var(--sunk); }
+.share i { display: block; height: 100%; }
+.legend { display: flex; flex-wrap: wrap; gap: 4px 14px; font-size: 12px; color: var(--muted); }
+.legend span { display: inline-flex; align-items: center; gap: 6px; }
+.legend i { width: 9px; height: 9px; border-radius: 2px; display: inline-block; }
+.m0 { background: var(--accent); } .m1 { background: var(--auto); } .m2 { background: var(--wait); } .m3 { background: var(--ok); } .m4 { background: var(--muted); }
+td .id { display: block; font-family: var(--font-mono); font-size: 11.5px; color: var(--muted); overflow-wrap: anywhere; }
+tr.total td { border-top: 2px solid var(--line); font-weight: 600; }
 
 .strip { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 22px; background: var(--surface); border: 1px solid var(--line); border-radius: 12px; padding: 12px 16px; }
 .attn { display: inline-flex; align-items: center; gap: 8px; background: var(--wait-soft); color: var(--wait); border-radius: 999px; padding: 4px 12px; font-weight: 600; font-size: 13.5px; }
@@ -273,6 +289,10 @@ kbd { font-family: var(--font-mono); font-size: 11.5px; border: 1px solid var(--
           </table>
         </div>
       </section>
+      <section class="panel" aria-label="Model spend this week">
+        <div class="panel-head"><h2>Model spend this week</h2><span class="sub">Every model call, with what OpenRouter billed</span></div>
+        <div id="spend"></div>
+      </section>
     </div>
     <div class="col">
       <section class="panel" aria-label="What your team knows">
@@ -302,7 +322,7 @@ const REFRESH_MS = 5000;
 const REASONS = ["Too salesy", "Wrong tone", "Facts are wrong", "Too long", "Not the right time"];
 const POST_LIMIT = 300;
 const ui = {
-  lowering: null, busy: new Set(), selected: null, tab: "view", edits: {}, mail: {},
+  lowering: null, busy: new Map(), selected: null, tab: "view", edits: {}, mail: {},
   rejecting: null, picked: new Set(), reason: {},
 };
 let data = null;
@@ -349,12 +369,15 @@ async function post(path, body) {
   return payload.message;
 }
 
-async function act(key, path, body) {
-  if (ui.busy.has(key)) return;
-  ui.busy.add(key);
+async function act(key, path, body, doing = {}) {
+  if (ui.busy.has(key)) return false;
+  ui.busy.set(key, { ...doing, since: Date.now() });
   render();
+  if (key === ui.selected) renderReview();
+  let ok = false;
   try {
     toast(await post(path, body));
+    ok = true;
     ui.lowering = null;
     if (key === ui.rejecting) { ui.rejecting = null; ui.picked.clear(); }
     if (key in ui.edits || key in ui.mail) { delete ui.edits[key]; delete ui.mail[key]; }
@@ -364,7 +387,24 @@ async function act(key, path, body) {
   } finally {
     ui.busy.delete(key);
     await load();
+    if (data && key === ui.selected) renderReview();
   }
+  return ok;
+}
+
+const SLOW_MS = 3000;
+function busyLabel(key, kind, text) {
+  const doing = ui.busy.get(key);
+  return doing && doing.kind === kind ? `<span class="spin" aria-hidden="true"></span>${esc(doing.label)}` : text;
+}
+const workingClass = (key, kind) => (ui.busy.get(key)?.kind === kind ? "working" : "");
+function slowText(key) {
+  const doing = ui.busy.get(key);
+  return doing && doing.slow && Date.now() - doing.since >= SLOW_MS ? doing.slow : "";
+}
+function tickSlow() {
+  const el = document.querySelector("#review .slow");
+  if (el) el.textContent = slowText(el.dataset.key);
 }
 
 function renderStrip() {
@@ -377,7 +417,7 @@ function renderStrip() {
     <span class="stat"><b>${s.done_week}</b> tasks done this week</span>
     <span class="stat"><b>${s.actions_week}</b> real actions</span>
     <span class="stat"><b>${rate}</b> approved without edits</span>
-    <span class="stat"><b class="mono">${fmtTokens(s.tokens_week)}</b> tokens · about $${s.cost_week.toFixed(2)}</span>`;
+    <span class="stat"><b class="mono">${fmtTokens(s.tokens_week)}</b> tokens${s.billed_week === null ? "" : ` · <b class="mono">$${s.billed_week.toFixed(s.billed_week < 1 ? 3 : 2)}</b> billed`}${s.unbilled_week ? ` · ${s.unbilled_week} call${s.unbilled_week > 1 ? "s" : ""} without a cost` : ""}</span>`;
 }
 
 function renderTeams() {
@@ -392,7 +432,7 @@ function renderTeams() {
     <div class="threshold">
       <span>Offer more autonomy after</span>
       <span class="stepper">
-        <button type="button" data-act="threshold" data-team="${esc(team.team_id)}" data-value="${n - 1}" aria-label="Fewer approvals" ${n <= 1 || busy ? "disabled" : ""}>−</button><output>${n}</output><button type="button" data-act="threshold" data-team="${esc(team.team_id)}" data-value="${n + 1}" aria-label="More approvals" ${n >= data.promote_after_max || busy ? "disabled" : ""}>+</button>
+        <button type="button" data-act="threshold" data-team="${esc(team.team_id)}" data-value="${n - 1}" aria-label="Fewer approvals" ${n <= 1 || busy ? "disabled" : ""}>−</button><output>${busy ? `<span class="spin" aria-label="Saving"></span>` : n}</output><button type="button" data-act="threshold" data-team="${esc(team.team_id)}" data-value="${n + 1}" aria-label="More approvals" ${n >= data.promote_after_max || busy ? "disabled" : ""}>+</button>
       </span>
       <span>approval${n === 1 ? "" : "s"} in a row without edits</span>
     </div>`;
@@ -422,8 +462,8 @@ function trustRow(team, t) {
   let actions = "";
   if (ui.lowering === key) {
     actions = `Lower to ${esc(data.levels[t.level - 1])}?
-      <button class="btn small danger" data-act="lower-yes" data-team="${esc(team.team_id)}" data-type="${esc(t.task_type)}" type="button" ${ui.busy.has(key) ? "disabled" : ""}>Lower</button>
-      <button class="btn small quiet" data-act="lower-no" type="button">Cancel</button>`;
+      <button class="btn small danger ${workingClass(key, "lower")}" data-act="lower-yes" data-team="${esc(team.team_id)}" data-type="${esc(t.task_type)}" type="button" ${ui.busy.has(key) ? "disabled" : ""}>${busyLabel(key, "lower", "Lower")}</button>
+      <button class="btn small quiet" data-act="lower-no" type="button" ${ui.busy.has(key) ? "disabled" : ""}>Cancel</button>`;
   } else if (t.level > 0) {
     actions = `<button class="btn small" data-act="lower" data-key="${esc(key)}" type="button">Lower</button>`;
   }
@@ -512,7 +552,7 @@ function renderInbox(force = false) {
         <span>${esc(d.type)} · ${esc(d.team)}</span>
         <span class="mono">check ${d.check}%</span>
         ${d.revision ? `<span class="pill neutral">Revision ${d.revision} of 2</span>` : ""}
-        ${changed(d) ? `<span class="pill wait">Edited</span>` : `<span>${esc(fmtTime(d.created_at))}</span>`}
+        ${ui.busy.has(d.approval_id) ? `<span class="pill in_progress">${busyLabel(d.approval_id, ui.busy.get(d.approval_id).kind, "")}</span>` : changed(d) ? `<span class="pill wait">Edited</span>` : `<span>${esc(fmtTime(d.created_at))}</span>`}
       </span>
     </button>`).join("");
   const focused = $("review").contains(document.activeElement);
@@ -536,12 +576,12 @@ function renderReview() {
     : d.kind === "email" ? `<div class="mailpreview">${markdown(text)}</div>` : `<div class="plain">${esc(d.preview)}</div>`;
   const mailhead = d.kind === "email" ? `
     <div class="mailhead">
-      <label for="mail-to">To</label><input id="mail-to" data-mail="to" value="${esc(mail.to)}" autocomplete="off">
-      <label for="mail-subject">Subject</label><input id="mail-subject" data-mail="subject" value="${esc(mail.subject)}" autocomplete="off">
+      <label for="mail-to">To</label><input id="mail-to" data-mail="to" value="${esc(mail.to)}" autocomplete="off" ${busy}>
+      <label for="mail-subject">Subject</label><input id="mail-subject" data-mail="subject" value="${esc(mail.subject)}" autocomplete="off" ${busy}>
     </div>` : "";
   const editable = d.kind === "post" || d.kind === "email";
   const editor = `
-    <textarea class="editor ${d.kind === "email" ? "email" : ""}" id="editor" aria-label="Edit the draft">${esc(text)}</textarea>
+    <textarea class="editor ${d.kind === "email" ? "email" : ""}" id="editor" aria-label="Edit the draft" ${busy}>${esc(text)}</textarea>
     ${d.kind === "post"
       ? `<div class="counter ${over ? "over" : count > 280 ? "near" : ""}" id="counter"><span class="bar"><i style="width:${Math.min(100, count / 3)}%"></i></span><span class="mono">${count} / ${POST_LIMIT}</span>${over ? "<span>Too long for Bluesky</span>" : ""}</div>`
       : `<div class="sub">Simple formatting works: **bold**, - lists, links.</div>`}`;
@@ -571,10 +611,10 @@ function renderReview() {
       <label class="sub" for="reason">Tell ${esc(d.lead)} what to change</label>
       <textarea id="reason" placeholder="Mention the Friday date, less hype…">${esc(ui.reason[id] || "")}</textarea>
       <div class="actions" style="border:0;padding:0">
-        <button class="btn primary" data-act="revise" type="button" ${left && !busy ? "" : "disabled"}>Ask ${esc(d.lead)} to revise${left ? ` (${left} left)` : " (none left)"}</button>
-        <button class="btn danger outline" data-act="drop" type="button" ${busy}>Drop it</button>
+        <button class="btn primary ${workingClass(id, "revise")}" data-act="revise" type="button" ${left && !busy ? "" : "disabled"}>${busyLabel(id, "revise", `Ask ${esc(d.lead)} to revise${left ? ` (${left} left)` : " (none left)"}`)}</button>
+        <button class="btn danger outline ${workingClass(id, "drop")}" data-act="drop" type="button" ${busy}>${busyLabel(id, "drop", "Drop it")}</button>
         <span class="spacer"></span>
-        <button class="btn quiet" data-act="cancel-reject" type="button">Cancel</button>
+        <button class="btn quiet" data-act="cancel-reject" type="button" ${busy}>Cancel</button>
       </div>
     </div>` : "";
   const label = isChanged
@@ -582,24 +622,27 @@ function renderReview() {
     : d.kind === "post" ? "Approve and post" : d.kind === "email" ? "Approve and send" : "Approve";
   const revised = d.revised_after ? `<span>Revised after your reason: “${esc(d.revised_after)}”</span>` : "";
   $("review").innerHTML = `
-    <div class="review">
+    <div class="review ${busy ? "busy" : ""}">
       <div class="review-head"><h3>${esc(d.title)}</h3><span class="sub">${esc(d.type)} · ${esc(d.team)}</span>${d.revision ? `<span class="pill neutral">Revision ${d.revision} of 2</span>` : ""}</div>
       ${d.asked ? `<div class="asked"><b>You asked:</b> “${esc(d.asked)}”</div>` : ""}
       ${d.steps.length || revised ? `<div class="steps">${d.steps.map((s) => `<span>${esc(s)}</span>`).join("")}${revised}</div>` : ""}
       <div class="check"><span>Independent check</span><span class="meter"><i style="width:${d.check}%"></i></span><span class="mono">${d.check}%</span></div>
-      ${mailhead}
-      ${tabs}
-      ${body}
-      ${rules}
-      <div class="consequence">${what} ${learn}</div>
+      <div class="rbody">
+        ${mailhead}
+        ${tabs}
+        ${body}
+        ${rules}
+        <div class="consequence">${what} ${learn}</div>
+      </div>
       ${reject}
       <div class="actions">
-        <button class="btn primary" data-act="approve" type="button" ${over || busy ? "disabled" : ""}>${label}</button>
-        ${editable ? (ui.tab === "edit" ? `<button class="btn" data-act="preview" type="button">Preview</button>` : `<button class="btn" data-act="edit" type="button">Edit</button>`) : ""}
-        ${isChanged ? `<button class="btn quiet" data-act="revert" type="button">Undo my changes</button>` : ""}
+        <button class="btn primary ${workingClass(id, "approve")}" data-act="approve" type="button" ${over || busy ? "disabled" : ""}>${busyLabel(id, "approve", label)}</button>
+        ${editable ? (ui.tab === "edit" ? `<button class="btn" data-act="preview" type="button" ${busy}>Preview</button>` : `<button class="btn" data-act="edit" type="button" ${busy}>Edit</button>`) : ""}
+        ${isChanged ? `<button class="btn quiet" data-act="revert" type="button" ${busy}>Undo my changes</button>` : ""}
         <span class="spacer"></span>
         <button class="btn danger outline" data-act="reject" type="button" ${busy}>Reject</button>
       </div>
+      <div class="slow" data-key="${esc(id)}" aria-live="polite">${esc(slowText(id))}</div>
     </div>`;
 }
 
@@ -627,6 +670,33 @@ function renderTasks() {
     </tr>`).join("") : `<tr><td colspan="6" class="empty">No tasks yet. Ask a team for something in its Telegram topic.</td></tr>`;
 }
 
+function money(cost, unbilled) {
+  if (cost === null) return "not reported";
+  return `$${cost.toFixed(4)}${unbilled ? ` + ${unbilled} not reported` : ""}`;
+}
+
+function renderSpend() {
+  const rows = data.spend;
+  if (!rows.length) { $("spend").innerHTML = `<p class="empty">No model calls yet this week.</p>`; return; }
+  const sum = (key) => rows.reduce((n, r) => n + r[key], 0);
+  const costs = rows.filter((r) => r.cost !== null);
+  const total = costs.length ? costs.reduce((n, r) => n + r.cost, 0) : null;
+  const color = (i) => `m${Math.min(i, 4)}`;
+  $("spend").innerHTML = `
+    ${total ? `<div class="share" aria-hidden="true">${rows.map((r, i) => `<i class="${color(i)}" style="width:${r.share}%"></i>`).join("")}</div>
+    <div class="legend">${rows.filter((r) => r.cost !== null).map((r, i) => `<span><i class="${color(i)}"></i>${esc(r.name)} $${r.cost.toFixed(4)} · ${r.share}%</span>`).join("")}</div>` : ""}
+    <div class="table-wrap">
+      <table>
+        <thead><tr><th>Model</th><th>Used for</th><th class="num">Calls</th><th class="num">Tokens in</th><th class="num">Tokens out</th><th class="num">Cost</th></tr></thead>
+        <tbody>
+          ${rows.map((r) => `<tr><td>${esc(r.name)}<span class="id">${esc(r.model)}</span></td><td><small>${esc(r.purpose || "")}</small></td><td class="num">${fmtNum(r.calls)}</td><td class="num">${fmtNum(r.input_tokens)}</td><td class="num">${fmtNum(r.output_tokens)}</td><td class="num">${money(r.cost, r.unbilled)}</td></tr>`).join("")}
+          <tr class="total"><td>Total</td><td></td><td class="num">${fmtNum(sum("calls"))}</td><td class="num">${fmtNum(sum("input_tokens"))}</td><td class="num">${fmtNum(sum("output_tokens"))}</td><td class="num">${money(total, sum("unbilled"))}</td></tr>
+        </tbody>
+      </table>
+    </div>
+    <p class="sub" style="margin:0">Costs are what OpenRouter billed for each call, never an estimate.</p>`;
+}
+
 function renderLessons() {
   $("lessons-title").textContent = data.lead ? `What ${data.lead} knows about you` : "What your teams know about you";
   const group = (kind, label) => {
@@ -635,7 +705,7 @@ function renderLessons() {
     return `<div class="label">${label}</div>` + items.map((l) => `
       <div class="lesson">
         <p>${esc(l.text)}</p>
-        <button class="btn small quiet" data-act="forget" data-id="${esc(l.lesson_id)}" type="button" ${ui.busy.has(l.lesson_id) ? "disabled" : ""}>Forget</button>
+        <button class="btn small quiet ${workingClass(l.lesson_id, "forget")}" data-act="forget" data-id="${esc(l.lesson_id)}" type="button" ${ui.busy.has(l.lesson_id) ? "disabled" : ""}>${busyLabel(l.lesson_id, "forget", "Forget")}</button>
         <div class="meta"><span class="${l.business_wide ? "all" : ""}">${esc(l.scope)}</span><span>${esc(l.source)}</span>${l.only ? `<span>${esc(l.only)}</span>` : ""}</div>
       </div>`).join("");
   };
@@ -674,8 +744,12 @@ function tickUndo() {
     const label = `Undo · ${Math.floor(left / 60)}:${String(left % 60).padStart(2, "0")}`;
     const id = slot.dataset.action;
     const button = slot.querySelector("button");
-    if (button) { button.querySelector(".mono").textContent = label.slice(7); return; }
-    slot.innerHTML = `<button class="btn small" data-act="undo" data-id="${esc(id)}" type="button" ${ui.busy.has(id) ? "disabled" : ""}>Undo · <span class="mono">${label.slice(7)}</span></button>`;
+    if (ui.busy.has(id)) {
+      if (!button?.classList.contains("working")) slot.innerHTML = `<button class="btn small working" type="button" disabled>${busyLabel(id, "undo", "Undo")}</button>`;
+      return;
+    }
+    if (button && !button.classList.contains("working")) { button.querySelector(".mono").textContent = label.slice(7); return; }
+    slot.innerHTML = `<button class="btn small" data-act="undo" data-id="${esc(id)}" type="button">Undo · <span class="mono">${label.slice(7)}</span></button>`;
   });
 }
 
@@ -687,7 +761,7 @@ function renderTemplates() {
       <p>${esc(t.people)}</p>
       ${t.hired
         ? `<span class="pill ok" style="justify-self:start">Hired</span>`
-        : `<button class="btn primary small" style="justify-self:start" data-act="hire" data-id="${esc(t.name)}" type="button" ${ui.busy.has("hire") ? "disabled" : ""}>Hire ${esc(t.display_name)}</button>`}
+        : `<button class="btn primary small ${workingClass("hire", t.name)}" style="justify-self:start" data-act="hire" data-id="${esc(t.name)}" type="button" ${ui.busy.has("hire") ? "disabled" : ""}>${busyLabel("hire", t.name, `Hire ${esc(t.display_name)}`)}</button>`}
     </div>`).join("");
 }
 
@@ -695,7 +769,7 @@ function render() {
   if (!data) return;
   document.title = `${data.business.name} · Tenure`;
   $("biz-name").textContent = data.business.name;
-  renderStrip(); renderTeams(); renderInbox(); renderTasks(); renderLessons(); renderLog(); renderTemplates();
+  renderStrip(); renderTeams(); renderInbox(); renderTasks(); renderSpend(); renderLessons(); renderLog(); renderTemplates();
 }
 
 function renderLive() {
@@ -759,7 +833,11 @@ document.addEventListener("click", (event) => {
         body.text = textOf(d);
         if (d.kind === "email") Object.assign(body, mailOf(d));
       }
-      act(d.approval_id, `/approvals/${d.approval_id}/approve`, body);
+      const verb = d.kind === "post" ? "Posting" : d.kind === "email" ? "Sending" : "Approving";
+      const doing = changed(d)
+        ? { kind: "approve", label: `${verb} your version…`, slow: `${d.lead} is learning from your changes…` }
+        : { kind: "approve", label: `${verb}…` };
+      act(d.approval_id, `/approvals/${d.approval_id}/approve`, body, doing);
       break;
     }
     case "edit": ui.tab = "edit"; renderReview(); $("editor")?.focus(); break;
@@ -770,17 +848,17 @@ document.addEventListener("click", (event) => {
     case "revise": {
       const why = [...ui.picked, (ui.reason[d.approval_id] || "").trim()].filter(Boolean).join(". ");
       if (!why) { toast(`Pick a reason or tell ${d.lead} what to change.`, true); break; }
-      act(d.approval_id, `/approvals/${d.approval_id}/reject`, { reason: why });
+      act(d.approval_id, `/approvals/${d.approval_id}/reject`, { reason: why }, { kind: "revise", label: `Sending to ${d.lead}…`, slow: `${d.lead} is learning from your reason…` });
       break;
     }
-    case "drop": act(d.approval_id, `/approvals/${d.approval_id}/reject`, { reason: null }); break;
-    case "undo": act(id, `/actions/${id}/undo`); break;
+    case "drop": act(d.approval_id, `/approvals/${d.approval_id}/reject`, { reason: null }, { kind: "drop", label: "Dropping…" }); break;
+    case "undo": act(id, `/actions/${id}/undo`, undefined, { kind: "undo", label: "Undoing…" }); break;
     case "lower": ui.lowering = el.dataset.key; render(); break;
     case "lower-no": ui.lowering = null; render(); break;
-    case "lower-yes": act(`${el.dataset.team}:${el.dataset.type}`, "/trust/lower", { team_id: el.dataset.team, task_type: el.dataset.type }); break;
-    case "forget": act(id, `/lessons/${id}/forget`); break;
+    case "lower-yes": act(`${el.dataset.team}:${el.dataset.type}`, "/trust/lower", { team_id: el.dataset.team, task_type: el.dataset.type }, { kind: "lower", label: "Lowering…" }); break;
+    case "forget": act(id, `/lessons/${id}/forget`, undefined, { kind: "forget", label: "Forgetting…" }); break;
     case "threshold": act(`threshold:${el.dataset.team}`, "/trust/threshold", { team_id: el.dataset.team, promote_after: Number(el.dataset.value) }); break;
-    case "hire": $("hire").close(); act("hire", "/hire", { template: id }); break;
+    case "hire": act("hire", "/hire", { template: id }, { kind: id, label: "Hiring…" }).then((ok) => { if (ok) $("hire").close(); }); break;
   }
 });
 
@@ -847,7 +925,7 @@ $("close-hire").addEventListener("click", () => $("hire").close());
 
 load();
 setInterval(load, REFRESH_MS);
-setInterval(() => { renderLive(); if (data) tickUndo(); }, 1000);
+setInterval(() => { renderLive(); if (data) { tickUndo(); tickSlow(); } }, 1000);
 </script>
 </body>
 </html>

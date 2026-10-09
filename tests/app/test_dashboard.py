@@ -11,7 +11,7 @@ from app.chat.flows import Flows
 from app.fake_brain import FakeBrain
 from app.store.memory import InMemoryStore
 from app.web.api import create_api
-from contract import AutonomyLevel
+from contract import AutonomyLevel, ModelUsage
 
 CHAT = -1001234567890
 REQUEST = "We launch our new coaching package on Friday, get the word out"
@@ -412,3 +412,69 @@ async def test_undo_after_the_window_is_refused(client, flows, chat, store, cloc
     clock.now = NOW + timedelta(minutes=11)
     response = await client.post(f"/b/{token}/api/actions/{action_id}/undo")
     assert response.status_code == 409 and "window" in response.json()["message"]
+
+async def test_spend_is_split_by_billed_cost_per_model(client, flows, chat, store, clock):
+    token, _ = await setup(flows, chat, client)
+    business_id, _ = await store.dashboard_access(token)
+
+    async def used(model, tokens, cost):
+        await store.log_usage(
+            ModelUsage(
+                usage_id=str(len(store._usage)),
+                business_id=business_id,
+                model=model,
+                input_tokens=tokens,
+                output_tokens=10,
+                cost=cost,
+                at=clock(),
+            )
+        )
+
+    await used("deepseek/deepseek-v4-flash-0731", 9000, 0.001)
+    await used("anthropic/claude-sonnet-5.5", 1000, 0.003)
+    await used("typesafe/jev-1.13", 500, None)
+    data = await overview(client, token)
+
+    spend = {row["name"]: row for row in data["spend"]}
+    names = [row["name"] for row in data["spend"]]
+    assert names == ["Claude Sonnet 5.5", "DeepSeek V4 Flash", "Jev 1.13"]
+    assert (spend["Claude Sonnet 5.5"]["share"], spend["DeepSeek V4 Flash"]["share"]) == (75, 25)
+    assert spend["Jev 1.13"]["cost"] is None and spend["Jev 1.13"]["unbilled"] == 1
+    assert data["stats"]["billed_week"] == 0.004 and data["stats"]["unbilled_week"] == 1
+
+async def test_approving_waits_so_the_next_reload_shows_the_result(client, flows, chat, brain):
+    token, thread_id = await setup(flows, chat, client)
+    await say(flows, REQUEST, thread_id)
+    post = next(d for d in (await overview(client, token))["drafts"] if d["kind"] == "post")
+    resolve = brain.resolve_approval
+
+    async def slow(decision):
+        await asyncio.sleep(0.1)
+        async for event in resolve(decision):
+            yield event
+
+    brain.resolve_approval = slow
+    response = await client.post(f"/b/{token}/api/approvals/{post['approval_id']}/approve")
+
+    assert response.status_code == 200
+    data = await overview(client, token)
+    assert post["approval_id"] not in {d["approval_id"] for d in data["drafts"]}
+    assert data["stats"]["waiting"] == 1
+    assert data["activity"][0]["summary"].startswith("Posted")
+
+async def test_a_rejected_draft_leaves_at_once_while_the_team_revises(
+    client, flows, chat, brain
+):
+    token, thread_id = await setup(flows, chat, client)
+    await say(flows, REQUEST, thread_id)
+    brain._delay = 0.2
+    post = next(d for d in (await overview(client, token))["drafts"] if d["kind"] == "post")
+
+    response = await client.post(
+        f"/b/{token}/api/approvals/{post['approval_id']}/reject", json={"reason": "Too long"}
+    )
+
+    assert response.status_code == 200
+    data = await overview(client, token)
+    assert post["approval_id"] not in {d["approval_id"] for d in data["drafts"]}
+    await flows.drain()

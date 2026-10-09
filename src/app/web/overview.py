@@ -13,6 +13,7 @@ from contract import (
     AutonomyLevel,
     Brain,
     Lesson,
+    ModelUsage,
     Persona,
     PostSocial,
     SendEmail,
@@ -23,7 +24,6 @@ from contract import (
 
 WEEK = timedelta(days=7)
 PROMOTE_AFTER_MAX = 20
-COST_PER_MILLION_TOKENS = 9.0
 LEVELS = list(AutonomyLevel)
 LEVEL_NAMES = ["Drafts only", "Asks first", "Acts, then tells you", "On its own"]
 STATUS_LABELS = {
@@ -34,6 +34,7 @@ STATUS_LABELS = {
     "rejected": "Rejected",
     "failed": "Failed",
 }
+NAMES = {"deepseek": "DeepSeek", "gpt": "GPT", "openai": "OpenAI"}
 SOURCE_LABELS = {
     "business_onboarding": "Setup",
     "team_onboarding": "Onboarding",
@@ -43,7 +44,11 @@ SOURCE_LABELS = {
 }
 
 async def build_overview(
-    store: AppStore, brain: Brain, business_id: str, now: datetime
+    store: AppStore,
+    brain: Brain,
+    business_id: str,
+    now: datetime,
+    deciding: frozenset[str] = frozenset(),
 ) -> dict[str, Any]:
     profile = await store.get_profile(business_id)
     templates = {t.name: t for t in brain.list_templates()}
@@ -54,13 +59,15 @@ async def build_overview(
     approvals = await store.list_approvals(business_id)
     actions = await store.list_actions(business_id)
     lessons = await store.list_all_lessons(business_id)
+    usage = await store.list_usage(business_id, now - WEEK)
     titles = {task.task_id: task.title for task in tasks}
-    pending = [a for a in approvals if a.status == "pending"]
+    pending = [a for a in approvals if a.status == "pending" and a.approval_id not in deciding]
     leads = [templates[t.template].personas[0].name for t in teams if t.template in templates]
     return {
         "business": {"name": profile.name if profile else "Your business"},
         "lead": leads[0] if len(leads) == 1 else None,
-        "stats": _stats(tasks, approvals, actions, now),
+        "stats": {**_stats(tasks, approvals, actions, usage, now), "waiting": len(pending)},
+        "spend": _spend(usage),
         "teams": [await _team(store, team, templates.get(team.template)) for team in teams],
         "drafts": [
             await _draft(store, a, approvals, team_by_id, templates) for a in pending
@@ -75,21 +82,72 @@ async def build_overview(
     }
 
 def _stats(
-    tasks: list[Task], approvals: list[Approval], actions: list[AuditEntry], now: datetime
+    tasks: list[Task],
+    approvals: list[Approval],
+    actions: list[AuditEntry],
+    usage: list[ModelUsage],
+    now: datetime,
 ) -> dict[str, Any]:
     since = now - WEEK
     recent_tasks = [task for task in tasks if task.updated_at >= since]
     resolved = [a for a in approvals if a.resolved_at and a.resolved_at >= since]
     clean = [a for a in resolved if a.status == "approved"]
-    tokens = sum(task.tokens_used for task in recent_tasks)
+    costs = [u.cost for u in usage if u.cost is not None]
     return {
-        "waiting": sum(a.status == "pending" for a in approvals),
         "done_week": sum(task.status == "done" for task in recent_tasks),
         "actions_week": sum(a.tool != "delete_social" and a.at >= since for a in actions),
         "clean_rate": round(100 * len(clean) / len(resolved)) if resolved else None,
-        "tokens_week": tokens,
-        "cost_week": round(tokens * COST_PER_MILLION_TOKENS / 1_000_000, 2),
+        "tokens_week": sum(u.input_tokens + u.output_tokens for u in usage),
+        "billed_week": round(sum(costs), 4) if costs else None,
+        "unbilled_week": sum(u.cost is None for u in usage),
     }
+
+def _spend(usage: list[ModelUsage]) -> list[dict[str, Any]]:
+    """
+    This week's calls per model, costliest first. Costs are only what OpenRouter billed; `share`
+    is the model's part of the billed total.
+    """
+    by_model: dict[str, list[ModelUsage]] = {}
+    for row in usage:
+        by_model.setdefault(row.model, []).append(row)
+    total = sum(u.cost for u in usage if u.cost is not None)
+    spend = []
+    for model, rows in by_model.items():
+        costs = [u.cost for u in rows if u.cost is not None]
+        spend.append(
+            {
+                "model": model,
+                "name": model_name(model),
+                "purpose": max(rows, key=lambda u: u.at).purpose,
+                "calls": len(rows),
+                "input_tokens": sum(u.input_tokens for u in rows),
+                "output_tokens": sum(u.output_tokens for u in rows),
+                "cost": round(sum(costs), 4) if costs else None,
+                "unbilled": len(rows) - len(costs),
+                "share": round(100 * sum(costs) / total) if total else 0,
+            }
+        )
+    return sorted(
+        spend,
+        key=lambda s: (s["cost"] or 0, s["input_tokens"] + s["output_tokens"]),
+        reverse=True,
+    )
+
+def model_name(model: str) -> str:
+    """
+    "anthropic/claude-sonnet-5.5" → "Claude Sonnet 5.5"; a trailing date stamp is dropped.
+    """
+    words = model.split("/")[-1].split(":")[0].split("-")
+    if len(words) > 1 and words[-1].isdigit() and len(words[-1]) >= 4:
+        words = words[:-1]
+    return " ".join(_word(word) for word in words)
+
+def _word(word: str) -> str:
+    if word.lower() in NAMES:
+        return NAMES[word.lower()]
+    if len(word) <= 3 and word[:1].isalpha() and any(c.isdigit() for c in word):
+        return word.upper()
+    return word.capitalize()
 
 async def _team(store: AppStore, team: Team, template: TemplateInfo | None) -> dict[str, Any]:
     trust = await store.list_trust(team.team_id)

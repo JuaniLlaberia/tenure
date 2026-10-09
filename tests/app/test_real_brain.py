@@ -32,7 +32,15 @@ def store() -> InMemoryStore:
 
 @pytest.fixture
 def brain(store: InMemoryStore, tools: FakeTools) -> TenureBrain:
-    jev = FakeJev({"answer_clear": 0.9, "has_feedback": 0.1, "is_clear": 0.9, "passes_check": 0.9})
+    jev = FakeJev(
+        {
+            "answer_clear": 0.9,
+            "has_feedback": 0.1,
+            "is_clear": 0.9,
+            "passes_check": 0.9,
+            "names_channels": 0.1,
+        }
+    )
     for task_type in ("social_post", "newsletter", "competitor_check"):
         jev.answers[f"needs_{task_type}"] = 0.9 if task_type == "social_post" else 0.1
     llm = FakeLLM(
@@ -64,6 +72,7 @@ async def test_onboard_hire_draft_and_post(brain: TenureBrain, store, tools: Fak
     for answer in ["We launch Friday", "list@b.co"]:
         await say(flows, answer, thread_id)
     await say(flows, "We launch Friday, get the word out", thread_id)
+    await tap(flows, chat.find("Where should this go out?"), "Only Bluesky")
     card = chat.find("Draft for approval")
     assert "We launch Friday!" in card.text
     await tap(flows, card, "Approve")

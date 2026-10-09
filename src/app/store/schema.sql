@@ -117,6 +117,20 @@ create table if not exists audit_log (
 );
 create index if not exists audit_log_business on audit_log (business_id, at desc);
 
+create table if not exists model_usage (
+    usage_id uuid primary key,
+    business_id uuid not null references businesses on delete cascade,
+    team_id uuid,
+    task_id uuid,
+    model text not null,
+    purpose text,
+    input_tokens integer not null,
+    output_tokens integer not null,
+    cost double precision,
+    at timestamptz not null
+);
+create index if not exists model_usage_business on model_usage (business_id, at desc);
+
 create table if not exists telegram_state (
     kind text not null,
     key text not null,
@@ -134,4 +148,5 @@ alter table tasks enable row level security;
 alter table approvals enable row level security;
 alter table lessons enable row level security;
 alter table audit_log enable row level security;
+alter table model_usage enable row level security;
 alter table telegram_state enable row level security;

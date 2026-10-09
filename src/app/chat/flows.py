@@ -55,6 +55,7 @@ from contract import (
 logger = logging.getLogger(__name__)
 
 STATE_KEPT = timedelta(days=14)
+DASHBOARD_WAIT = 30.0
 DASHBOARD_FOOTERS = {
     "approve": ui.APPROVED_ON_DASHBOARD,
     "edit": ui.EDITED_ON_DASHBOARD,
@@ -359,7 +360,9 @@ class Flows:
         edited_action: PlannedAction | None = None,
     ) -> None:
         """
-        Approve, edit or reject a draft from the dashboard, as if done in Telegram.
+        Approve, edit or reject a draft from the dashboard, as if done in Telegram. An approval
+        or edit returns once it has gone out (or after DASHBOARD_WAIT), so the page reloads with
+        the result; a rejection returns at once, since a revision can take minutes.
         """
         approval = await self._store.get_approval(approval_id)
         if approval is None or approval.business_id != business_id:
@@ -384,7 +387,16 @@ class Flows:
             edited_text=edited_text,
             edited_action=edited_action,
         )
-        self._track(self._decide_and_release(chat_id, approval.team_id, resolution))
+        task = self._track(self._decide_and_release(chat_id, approval.team_id, resolution))
+        if decision != "reject":
+            await asyncio.wait({task}, timeout=DASHBOARD_WAIT)
+
+    @property
+    def deciding(self) -> frozenset[str]:
+        """
+        Drafts being decided right now, which the dashboard no longer offers.
+        """
+        return frozenset(self._deciding)
 
     async def undo_from_dashboard(self, business_id: str, action_id: str) -> None:
         entry = await self._store.get_action(action_id)
@@ -401,7 +413,8 @@ class Flows:
                 raise Refused("That's already being undone.")
             await self._close(card, None)
         undo = partial(self._brain.undo_action, business_id, action_id)
-        self._spawn(chat_id, entry.team_id, self._thread_for(entry.team_id), undo)
+        task = self._spawn(chat_id, entry.team_id, self._thread_for(entry.team_id), undo)
+        await asyncio.wait({task}, timeout=DASHBOARD_WAIT)
 
     async def _decide_and_release(
         self, chat_id: int, team_id: str, decision: ApprovalDecision
@@ -515,15 +528,16 @@ class Flows:
     def _key(self, business_id: str, team_id: str | None) -> str:
         return f"{business_id}:{team_id or 'company'}"
 
-    def _track(self, coro: Coroutine[Any, Any, None]) -> None:
+    def _track(self, coro: Coroutine[Any, Any, None]) -> asyncio.Task:
         task = asyncio.create_task(coro)
         self._tasks.add(task)
         task.add_done_callback(self._tasks.discard)
+        return task
 
     def _spawn(
         self, chat_id: int, team_id: str | None, thread_id: int | None, events: Events
-    ) -> None:
-        self._track(self._call(chat_id, team_id, thread_id, events))
+    ) -> asyncio.Task:
+        return self._track(self._call(chat_id, team_id, thread_id, events))
 
     async def _call(
         self, chat_id: int, team_id: str | None, thread_id: int | None, events: Events
