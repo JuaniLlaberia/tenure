@@ -10,6 +10,7 @@ from app.fake_brain import FakeBrain
 from app.store.memory import InMemoryStore
 from app.tools.bluesky import Bluesky, rich_text
 from app.tools.email import Resend, ResendError, markdown_to_html
+from app.tools.keenable import Keenable
 from app.tools.real import NO_BLUESKY, NO_EMAIL, RealTools
 from app.tools.web import TEXT_LIMIT, Web, is_public, parse_results
 from contract import (
@@ -20,6 +21,7 @@ from contract import (
     Error,
     IncomingMessage,
     NeedsApproval,
+    SearchResult,
 )
 
 URI = "at://did:plc:abc/app.bsky.feed.post/3kxyz"
@@ -196,6 +198,62 @@ async def test_real_tools_never_raise():
     result = await tools.post_social("b1", "Hi")
     assert not result.ok and result.error == "bluesky is down" and result.action_id
     assert await tools.web_search("coaching") == []
+
+async def test_keenable_search_parses_results():
+    seen = {}
+
+    def handler(request):
+        seen["key"] = request.headers["x-api-key"]
+        seen["body"] = json.loads(request.content)
+        return httpx.Response(200, json={"results": [
+            {"title": " Coach  Pricing ", "url": "https://coach.example", "snippet": "From\n$500"},
+            {"title": "No snippet", "url": "https://b.example", "description": "About us"},
+            {"title": "No url"},
+        ]})
+
+    results = await Keenable("keen_x", http=mock_http(handler)).search("coaching", 3)
+    assert seen["key"] == "keen_x" and seen["body"]["max_results"] == 3
+    assert [(r.title, r.url, r.snippet) for r in results] == [
+        ("Coach Pricing", "https://coach.example", "From $500"),
+        ("No snippet", "https://b.example", "About us"),
+    ]
+
+class FakeSearch:
+    def __init__(self, name: str, results: list[str] | Exception) -> None:
+        self.name = name
+        self.results = results
+        self.queries: list[str] = []
+
+    async def search(self, query, k=5):
+        self.queries.append(query)
+        if isinstance(self.results, Exception):
+            raise self.results
+        return [SearchResult(title=self.name, url=url, snippet="") for url in self.results]
+
+def keenable_answering(status: int) -> Keenable:
+    return Keenable("keen_x", http=mock_http(lambda request: httpx.Response(status, text="no")))
+
+async def test_search_uses_keenable_first():
+    keenable, ddg = FakeSearch("keenable", ["https://k.example"]), FakeSearch("ddg", [])
+    tools = RealTools(web=ddg, keenable=keenable)
+    assert [r.title for r in await tools.web_search("coaching")] == ["keenable"]
+    assert ddg.queries == []
+
+async def test_search_switches_to_duckduckgo_when_keenable_runs_out():
+    ddg = FakeSearch("ddg", ["https://d.example"])
+    tools = RealTools(web=ddg, keenable=keenable_answering(402))
+    assert [r.title for r in await tools.web_search("one")] == ["ddg"]
+    assert tools._keenable is None
+    await tools.web_search("two")
+    assert ddg.queries == ["one", "two"]
+
+async def test_a_rate_limited_or_empty_search_falls_back_once():
+    ddg = FakeSearch("ddg", ["https://d.example"])
+    tools = RealTools(web=ddg, keenable=keenable_answering(429))
+    assert [r.title for r in await tools.web_search("one")] == ["ddg"]
+    assert tools._keenable is not None
+    tools = RealTools(web=ddg, keenable=FakeSearch("keenable", []))
+    assert [r.title for r in await tools.web_search("two")] == ["ddg"]
 
 class RecordingTools:
     def __init__(self, fail_posts: bool = False) -> None:

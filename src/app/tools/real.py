@@ -1,5 +1,6 @@
 """
 The app's Tools implementation: real Bluesky, Resend email, search and fetch.
+Search uses Keenable while it answers and DuckDuckGo after that (or for a single failed search).
 Expected failures come back as ActionResult(ok=False) or empty results, never as exceptions.
 One Bluesky account and one email sender for every business, for now.
 """
@@ -10,6 +11,7 @@ from uuid import uuid4
 
 from app.tools.bluesky import Bluesky
 from app.tools.email import Resend
+from app.tools.keenable import Keenable, KeenableError
 from app.tools.web import Web
 from contract import ActionResult, PageContent, SearchResult
 
@@ -26,11 +28,16 @@ def _reason(error: Exception) -> str:
 
 class RealTools:
     def __init__(
-        self, bluesky: Bluesky | None = None, email: Resend | None = None, web: Web | None = None
+        self,
+        bluesky: Bluesky | None = None,
+        email: Resend | None = None,
+        web: Web | None = None,
+        keenable: Keenable | None = None,
     ) -> None:
         self._bluesky = bluesky
         self._email = email
         self._web = web or Web()
+        self._keenable = keenable
 
     @classmethod
     def from_env(cls) -> "RealTools":
@@ -38,14 +45,17 @@ class RealTools:
         password = os.environ.get("BLUESKY_APP_PASSWORD")
         api_key = os.environ.get("RESEND_API_KEY")
         sender = os.environ.get("RESEND_FROM")
+        keenable_key = os.environ.get("KEENABLE_API_KEY")
         bluesky = Bluesky(handle, password) if handle and password else None
         email = Resend(api_key, sender) if api_key and sender else None
+        keenable = Keenable(keenable_key) if keenable_key else None
         logger.info(
-            "Tools: Bluesky %s, email %s, search DuckDuckGo",
+            "Tools: Bluesky %s, email %s, search %s",
             "on" if bluesky else "off",
             "on" if email else "off",
+            "Keenable then DuckDuckGo" if keenable else "DuckDuckGo",
         )
-        return cls(bluesky, email)
+        return cls(bluesky, email, keenable=keenable)
 
     async def check(self) -> None:
         """
@@ -95,11 +105,29 @@ class RealTools:
         return ActionResult(action_id=action_id, ok=True, external_id=email_id)
 
     async def web_search(self, query: str, k: int = 5) -> list[SearchResult]:
+        results = await self._keenable_search(query, k)
+        if results:
+            return results
         try:
             return await self._web.search(query, k)
         except Exception:
             logger.exception("Web search failed")
             return []
+
+    async def _keenable_search(self, query: str, k: int) -> list[SearchResult]:
+        if self._keenable is None:
+            return []
+        try:
+            return await self._keenable.search(query, k)
+        except KeenableError as error:
+            if error.out:
+                logger.warning("%s. Searching with DuckDuckGo from now on", _reason(error))
+                self._keenable = None
+            else:
+                logger.warning("%s. Using DuckDuckGo for this search", _reason(error))
+        except Exception as error:
+            logger.warning("Keenable search failed (%s). Using DuckDuckGo", _reason(error))
+        return []
 
     async def fetch_page(self, url: str) -> PageContent | None:
         try:
