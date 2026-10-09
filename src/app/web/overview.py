@@ -210,6 +210,7 @@ async def _draft(
         "lead": personas[0].name if personas else "The team",
         "lead_avatar": avatar_url(personas[0]) if personas else None,
         "images": [_image(ref) for ref in images if ref.kind == "image"],
+        "new_image": any(ref.kind == "image" and ref.source == "generated" for ref in images),
         "type": ui.task_title(approval.task_type),
         "kind": "post" if isinstance(action, PostSocial) else "email" if action else "draft",
         "title": task.title if task else ui.task_title(approval.task_type),
@@ -235,7 +236,12 @@ def person(persona: Persona) -> dict[str, Any]:
     return {"name": persona.name, "role": persona.role, "avatar": avatar_url(persona)}
 
 def _image(ref: FileRef) -> dict[str, Any]:
-    return {"file_id": ref.file_id, "alt": ref.alt_text or ref.name or "", "name": ref.name}
+    return {
+        "file_id": ref.file_id,
+        "alt": ref.alt_text or ref.name or "",
+        "name": ref.name,
+        "made": ref.source == "generated",
+    }
 
 def _step(step: str, personas: list[Persona]) -> str:
     for persona in personas[1:]:

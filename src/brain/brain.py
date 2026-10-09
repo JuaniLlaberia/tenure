@@ -88,6 +88,8 @@ class TenureBrain:
 
     async def resolve_approval(self, decision: ApprovalDecision) -> AsyncIterator[Event]:
         enter(decision.business_id)
+        if decision.decision == "new_image":
+            self._image_feedback[decision.approval_id] = True
         stream = resolve_approval(
             self.deps, decision, learn=self._learn_from_approval, revise=self._revise
         )

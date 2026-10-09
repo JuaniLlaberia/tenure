@@ -209,3 +209,48 @@ async def test_scheduler_runs_due_schedules_once_and_moves_on(flows, chat, brain
 
     await scheduler.run_due()
     assert len(brain.runs) == 1
+
+async def test_new_image_in_telegram_with_a_reason(flows, chat, brain):
+    thread_id, post, _ = await image_drafts(flows, chat)
+    assert post.data("New image")
+
+    await tap(flows, post, "New image")
+    asked = chat.messages[post.message_id]
+    assert ui.NEW_IMAGE_ASK in asked.text
+    await tap(flows, asked, "Say what to change")
+    assert chat.last(thread_id).text == ui.IMAGE_REASON_PROMPT
+    await say(flows, "Warmer colours, no people", thread_id)
+
+    (decision,) = brain.decisions
+    assert (decision.decision, decision.reason) == ("new_image", "Warmer colours, no people")
+    assert "New image requested: Warmer colours" in chat.messages[post.message_id].text
+    again = [m for m in chat.thread(thread_id) if "Draft for approval" in m.text][-1]
+    assert again.message_id != post.message_id and len(again.photos) == 1
+
+async def test_new_image_just_try_again(flows, chat, brain):
+    _, post, _ = await image_drafts(flows, chat)
+    await tap(flows, post, "New image")
+    await tap(flows, chat.messages[post.message_id], "Just try again")
+    (decision,) = brain.decisions
+    assert (decision.decision, decision.reason) == ("new_image", None)
+
+async def test_new_image_without_revisions_left_keeps_the_draft(flows, chat, brain, store):
+    _, post, _ = await image_drafts(flows, chat)
+    card = flows._state.approvals[post.data("Approve").split(":")[1]]
+    task = await store.get_task(card.task_id)
+    await store.save_task(task.model_copy(update={"revisions": 2}))
+
+    assert await tap(flows, post, "New image") == ui.NO_REVISIONS_LEFT
+    assert chat.messages[post.message_id].data("Approve")
+    assert brain.decisions == []
+
+async def test_founder_photos_get_no_new_image_button(chat, store, clock):
+    brain = Recording(store=store, tools=RealTools(files=Files(store, clock)), clock=clock)
+    flows = Flows(brain, chat, store=store, debounce=0.05, typing_every=60, clock=clock)
+    thread_id = await marketing_team(flows, chat)
+    chat.files["t1"] = b"jpg1"
+    caption = "Post this with a line about the new studio"
+    await flows.on_file(CHAT, thread_id, caption, IncomingFile("t1", "image/jpeg"), 50, NOW)
+    await flows.drain()
+    card = [m for m in chat.thread(thread_id) if "Draft for approval" in m.text][-2]
+    assert "New image" not in [b.text for row in card.keyboard for b in row]

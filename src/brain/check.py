@@ -9,6 +9,7 @@ from brain.prompts.check import PASSES_CHECK, review_text
 from brain.prompts.critic import MAX_ISSUES, CriticReport, critic_messages
 from brain.templates.models import TaskTypeSpec, Template
 from brain.templates.registries import OUTPUTS
+from brain.tools import is_plan
 from contract import BusinessProfile, FileRef, Lesson
 
 log = logging.getLogger(__name__)
@@ -88,6 +89,8 @@ async def _critic(
 async def _image_urls(deps: Deps, attached: list[FileRef]) -> list[str]:
     urls = []
     for file in attached:
+        if is_plan(file):
+            continue
         try:
             data = await deps.tools.read_file(file.business_id, file.file_id)
         except Exception as error:

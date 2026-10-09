@@ -107,6 +107,7 @@ tr.total td { border-top: 2px solid var(--line); font-weight: 600; }
 .imgcard img { width: 100%; aspect-ratio: 1; object-fit: cover; display: block; background: var(--sunk); border-bottom: 1px solid var(--line); }
 .imgcard .foot { padding: 7px 8px; display: grid; gap: 6px; font-size: 12px; color: var(--muted); }
 .imgcard .foot span { overflow-wrap: anywhere; }
+.img-actions { display: flex; flex-wrap: wrap; gap: 6px; }
 .imgcard.removed img { opacity: 0.3; }
 .imgcard.removed .foot span { text-decoration: line-through; }
 #schedules, #spend, #log, #lessons, #teams { min-width: 0; }
@@ -134,8 +135,9 @@ tr.total td { border-top: 2px solid var(--line); font-weight: 600; }
 .person small { color: var(--muted); display: block; font-size: 12px; line-height: 1.2; }
 .badge { font-size: 11.5px; border-radius: 999px; padding: 1px 8px; background: var(--sunk); color: var(--muted); font-family: var(--font-body); font-weight: 500; }
 .trust { border-top: 1px solid var(--line); }
-.trust-row { display: grid; grid-template-columns: minmax(120px, 1fr) minmax(220px, 2fr) auto; gap: 10px 18px; align-items: center; padding-block: 12px; border-bottom: 1px solid var(--line); }
-@media (max-width: 640px) { .trust-row { grid-template-columns: minmax(0, 1fr); } }
+.trust-row { display: grid; grid-template-columns: minmax(130px, 200px) minmax(0, 1fr) 128px; gap: 10px 24px; align-items: center; padding-block: 12px; border-bottom: 1px solid var(--line); }
+.tt-actions { display: flex; flex-wrap: wrap; align-items: center; justify-content: flex-end; gap: 6px 8px; font-size: 12.5px; color: var(--muted); text-align: right; }
+@media (max-width: 640px) { .trust-row { grid-template-columns: minmax(0, 1fr); } .tt-actions { justify-content: flex-start; text-align: left; } }
 .tt-name { font-weight: 600; }
 .ladder { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 4px; }
 .rung { display: grid; gap: 4px; min-width: 0; }
@@ -147,7 +149,6 @@ tr.total td { border-top: 2px solid var(--line); font-weight: 600; }
 .pips { display: inline-flex; gap: 3px; }
 .pips i { width: 9px; height: 9px; border-radius: 50%; border: 1.5px solid var(--accent); }
 .pips i.f { background: var(--accent); }
-.tt-actions { display: flex; flex-wrap: wrap; gap: 6px; justify-content: flex-end; align-items: center; font-size: 12.5px; }
 .threshold { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 12px; font-size: 13px; color: var(--muted); }
 .stepper { display: inline-flex; align-items: center; border: 1px solid var(--line); border-radius: 8px; overflow: hidden; }
 .stepper button { border: 0; background: var(--sunk); width: 28px; height: 28px; }
@@ -261,6 +262,7 @@ kbd { font-family: var(--font-mono); font-size: 11.5px; border: 1px solid var(--
 .actions { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; border-top: 1px solid var(--line); padding-top: 12px; }
 .actions .spacer { flex: 1; }
 .rejectbox { border: 1px solid var(--bad); border-radius: 10px; padding: 12px; display: grid; gap: 10px; background: var(--bad-soft); }
+.rejectbox.redraw { background: var(--sunk); border-color: var(--line); }
 .rejectbox textarea { background: var(--surface); }
 .btn.danger.outline { border-color: var(--bad); background: transparent; }
 .notice { padding: 40px 0; text-align: center; color: var(--muted); }
@@ -402,7 +404,7 @@ const POST_LIMIT = 300;
 const PAGES = ["home", "drafts", "teams", "schedules", "knowledge", "activity", "spend"];
 const ui = {
   lowering: null, busy: new Map(), selected: null, tab: "view", edits: {}, mail: {},
-  rejecting: null, picked: new Set(), reason: {}, removed: {}, page: "home",
+  rejecting: null, picked: new Set(), reason: {}, removed: {}, page: "home", redrawing: null, imageReason: {},
 };
 let data = null;
 let clockOffset = 0;
@@ -626,7 +628,7 @@ function changed(d) {
 }
 
 function select(id) {
-  ui.selected = id; ui.tab = "view"; ui.rejecting = null; ui.picked.clear();
+  ui.selected = id; ui.tab = "view"; ui.rejecting = null; ui.redrawing = null; ui.picked.clear();
   renderInbox(true);
 }
 function move(step) {
@@ -703,16 +705,31 @@ function renderReview() {
     </div>` : "";
   const body = ui.tab === "edit" ? editor : ui.tab === "diff" ? `<div class="diff">${diff(d.text, text)}</div>` : preview;
   const removable = editable && d.images.length > 0;
+  const left = Math.max(0, 2 - d.revision);
   const where = d.kind === "email" ? "the first is the header, the rest go below the text" : d.kind === "post" ? "posted in this order" : "nothing gets posted";
   const images = d.images.length ? `
     <div class="label">Images · ${where}</div>
     <div class="imgs">${d.images.map((image) => {
       const gone = removedOf(d).has(image.file_id);
-      const button = removable
+      const remove = removable
         ? `<button class="btn small ${gone ? "" : "danger"}" type="button" data-act="img-toggle" data-file="${esc(image.file_id)}" ${busy}>${gone ? "Put back" : "Remove"}</button>`
         : "";
-      return `<div class="imgcard ${gone ? "removed" : ""}"><a href="${fileUrl(image.file_id, false)}" target="_blank" rel="noopener"><img src="${fileUrl(image.file_id)}" alt="${esc(image.alt)}" loading="lazy"></a><div class="foot"><span>${esc(image.alt || "No description")}</span>${button}</div></div>`;
-    }).join("")}</div>` : "";
+      const redo = image.made && !gone
+        ? `<button class="btn small" type="button" data-act="new-image" ${busy || !left ? "disabled" : ""} title="${left ? "Keeps the text; makes one new image" : "No revisions left on this draft"}">↻ New image</button>`
+        : "";
+      const buttons = remove || redo ? `<div class="img-actions">${redo}${remove}</div>` : "";
+      return `<div class="imgcard ${gone ? "removed" : ""}"><a href="${fileUrl(image.file_id, false)}" target="_blank" rel="noopener"><img src="${fileUrl(image.file_id)}" alt="${esc(image.alt)}" loading="lazy"></a><div class="foot"><span>${esc(image.alt || "No description")}</span>${buttons}</div></div>`;
+    }).join("")}</div>
+    ${ui.redrawing === id ? `
+    <div class="rejectbox redraw">
+      <label class="sub" for="image-reason">What should change in the image? (optional)</label>
+      <textarea id="image-reason" placeholder="Warmer colours, no people…">${esc(ui.imageReason[id] || "")}</textarea>
+      <div class="actions" style="border:0;padding:0">
+        <button class="btn primary ${workingClass(id, "new-image")}" data-act="new-image-go" type="button" ${left && !busy ? "" : "disabled"}>${busyLabel(id, "new-image", "↻ Make a new image")}</button>
+        <button class="btn quiet" data-act="new-image-cancel" type="button" ${busy}>Cancel</button>
+        <span class="sub">${left ? `Keeps the text. Uses 1 of ${left} revision${left > 1 ? "s" : ""} left.` : "No revisions left on this draft."}</span>
+      </div>
+    </div>` : ""}` : "";
   const rules = d.rules.length ? `
     <details class="rules"><summary>${esc(d.lead)} followed ${d.rules.length} rule${d.rules.length > 1 ? "s" : ""} for this</summary>
       <div class="chips">${d.rules.map((r) => `<span class="chip rule">${esc(r)}</span>`).join("")}</div></details>` : "";
@@ -723,7 +740,6 @@ function renderReview() {
   const learn = isChanged
     ? `<b>${esc(d.lead)} learns from your changes.</b>${dropped} Editing resets the approval streak (${d.streak} of ${d.promote_after}).`
     : `Approving without changes counts toward ${esc(d.lead)}'s streak: <b>${Math.min(d.streak + 1, d.promote_after)} of ${d.promote_after}</b>.`;
-  const left = Math.max(0, 2 - d.revision);
   const reject = ui.rejecting === id ? `
     <div class="rejectbox">
       <b>Why not?</b>
@@ -1035,7 +1051,15 @@ document.addEventListener("click", (event) => {
     case "sched-run": act(`sched:${id}`, `/schedules/${id}/run`, undefined, { kind: "run", label: "Starting…" }); break;
     case "sched-stop": act(`sched:${id}`, `/schedules/${id}/stop`, undefined, { kind: "stop", label: "Stopping…" }); break;
     case "sched-start": act(`sched:${id}`, `/schedules/${id}/start`, undefined, { kind: "start", label: "Turning on…" }); break;
-    case "reject": ui.rejecting = d.approval_id; renderReview(); $("reason")?.focus(); break;
+    case "new-image": ui.redrawing = d.approval_id; ui.rejecting = null; renderReview(); $("image-reason")?.focus(); break;
+    case "new-image-cancel": ui.redrawing = null; renderReview(); break;
+    case "new-image-go": {
+      const why = (ui.imageReason[d.approval_id] || "").trim();
+      ui.redrawing = null;
+      act(d.approval_id, `/approvals/${d.approval_id}/new-image`, { reason: why || null }, { kind: "new-image", label: "Asking for a new image…", slow: "The team is planning and drawing the new image…" });
+      break;
+    }
+    case "reject": ui.rejecting = d.approval_id; ui.redrawing = null; renderReview(); $("reason")?.focus(); break;
     case "cancel-reject": ui.rejecting = null; ui.picked.clear(); renderReview(); break;
     case "revise": {
       const why = [...ui.picked, (ui.reason[d.approval_id] || "").trim()].filter(Boolean).join(". ");
@@ -1066,6 +1090,8 @@ document.addEventListener("input", (event) => {
     renderInbox();
   } else if (event.target.id === "reason") {
     ui.reason[d.approval_id] = event.target.value;
+  } else if (event.target.id === "image-reason") {
+    ui.imageReason[d.approval_id] = event.target.value;
   }
 });
 

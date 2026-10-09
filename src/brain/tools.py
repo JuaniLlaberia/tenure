@@ -1,23 +1,30 @@
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
 
+from brain.common import new_id
 from brain.context import MAX_FETCH_CHARS, lessons_section, profile_section
 from brain.deps import Deps
-from brain.helpers.images import ImageError
 from brain.helpers.llm import ToolDef
-from contract import FileRef
+from contract import FileKind, FileRef
 
 SEARCH_RESULTS = 5
 MAX_IMAGE_CALLS = 2
 ASPECT_RATIOS = ("1:1", "16:9")
 STATUS_PREVIEW = 60
+PLAN_PREFIX = "plan-"
+
+def is_plan(file: FileRef) -> bool:
+    """
+    A planned image: its prompt is known, but it's only made after the lead's review.
+    """
+    return file.file_id.startswith(PLAN_PREFIX) and file.size_bytes == 0
 
 @dataclass
 class ToolContext:
     """
-    What a tool may use during one specialist step. `files` and `prompts` collect the images
-    the step made; `image_calls` counts generate_image calls against `image_limit` (the step's
-    limit, lower when the request is close to its image budget).
+    What a tool may use during one specialist step. `files`, `prompts` and `aspects` collect
+    the images the step planned; `image_calls` counts generate_image calls against
+    `image_limit` (the step's limit, lower when the request is close to its image budget).
     """
 
     deps: Deps
@@ -26,6 +33,7 @@ class ToolContext:
     task_type: str
     files: list[FileRef] = field(default_factory=list)
     prompts: dict[str, str] = field(default_factory=dict)
+    aspects: dict[str, str] = field(default_factory=dict)
     image_calls: int = 0
     image_limit: int = MAX_IMAGE_CALLS
 
@@ -71,8 +79,9 @@ async def _fetch_page(ctx: ToolContext, args: dict) -> str:
 
 async def _generate_image(ctx: ToolContext, args: dict) -> str:
     """
-    Makes one image, stores it through Tools.save_file with its alt text and hands the model
-    the file id. Every failure is a tool error the model can react to, never a crash.
+    Plans one image: the prompt, alt text and shape, under a placeholder id the model puts in
+    its result. Nothing is generated here: the team graph makes planned images once, after
+    the lead's review passed, so a revision never pays for an image that gets thrown away.
     """
     prompt = str(args.get("prompt", "")).strip()
     if not prompt:
@@ -89,20 +98,20 @@ async def _generate_image(ctx: ToolContext, args: dict) -> str:
             "with none."
         )
     ctx.image_calls += 1
-    try:
-        image = await ctx.deps.images.generate(
-            ctx.deps.settings.model_image, prompt, aspect_ratio
-        )
-    except ImageError as error:
-        return f"Tool error: the image couldn't be made ({error}). You can try once more."
-    file = await ctx.deps.tools.save_file(
-        ctx.business_id, image.data, image.mime_type, alt_text=alt_text
+    file = FileRef(
+        file_id=f"{PLAN_PREFIX}{new_id()[:8]}",
+        business_id=ctx.business_id,
+        kind=FileKind.IMAGE,
+        mime_type="image/png",
+        size_bytes=0,
+        source="generated",
+        alt_text=alt_text,
+        created_at=ctx.deps.clock(),
     )
-    if file is None:
-        return "Tool error: the image was made but couldn't be stored. You can try once more."
     ctx.files.append(file)
     ctx.prompts[file.file_id] = prompt
-    return f"Saved image {file.file_id}: {alt_text}"
+    ctx.aspects[file.file_id] = aspect_ratio
+    return f"Saved image {file.file_id}: {alt_text} (planned; made once the draft passes review)"
 
 def _drawing(name: str, args: dict) -> str:
     subject = str(args.get("alt_text") or args.get("prompt") or "an image")
@@ -142,8 +151,9 @@ BRAIN_TOOLS: dict[str, BrainTool] = {
     "generate_image": BrainTool(
         name="generate_image",
         description=(
-            "Make one image from a detailed prompt and save it. Returns the image's id; put "
-            "that id in your result's `images`."
+            "Plan one image from a detailed prompt. It's made after the lead's review, so write "
+            "the prompt you want made. Returns the image's id; put that id in your result's "
+            "`images`."
         ),
         parameters={
             "type": "object",

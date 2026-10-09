@@ -49,6 +49,9 @@ PROMOTE_NO = "pn"
 FORGET = "fg"
 RUN_NOW = "sr"
 EDIT_FIELD = "ef"
+NEW_IMAGE = "ni"
+IMAGE_REASON = "nr"
+IMAGE_AGAIN = "ng"
 EDIT_APPROVE = "ea"
 EDIT_MORE = "em"
 EDIT_UNDO = "eu"
@@ -117,6 +120,14 @@ REJECTING = "✕ Rejecting: send your reason below, or /cancel"
 REJECTED = "✕ Rejected"
 APPROVED_ON_DASHBOARD = "✓ Approved on the dashboard"
 REJECTED_ON_DASHBOARD = "✕ Rejected on the dashboard"
+NEW_IMAGE_ASK = "↻ New image: what should change?"
+NEW_IMAGE_WAITING = "↻ New image: send what should change below, or /cancel"
+NEW_IMAGE_REQUESTED = "↻ New image requested"
+NEW_IMAGE_ON_DASHBOARD = "↻ New image requested on the dashboard"
+NO_REVISIONS_LEFT = "I'm out of revisions on this one. Approve it as it is, or reject it."
+IMAGE_REASON_PROMPT = (
+    "What should change in the image? Your next message here is the reason. /cancel to skip."
+)
 EDITED_ON_DASHBOARD = "✎ Edited on the dashboard"
 
 def text(value: str) -> str:
@@ -185,12 +196,27 @@ def approval_text(event: NeedsApproval, images_above: bool = False) -> str:
         f"<{tag}>{text(preview)}</blockquote>\n<i>{text(meta)}</i>"
     )
 
-def approval_keyboard(approval_id: str, editable: bool = True) -> Keyboard:
+def approval_keyboard(
+    approval_id: str, editable: bool = True, new_image: bool = False
+) -> Keyboard:
     approve = Button("✓ Approve", f"{APPROVE}:{approval_id}")
     reject = Button("✕ Reject", f"{REJECT}:{approval_id}")
-    if not editable:
-        return [[approve, reject]]
-    return [[approve, Button("✎ Edit", f"{EDIT}:{approval_id}"), reject]]
+    row = [approve, Button("✎ Edit", f"{EDIT}:{approval_id}"), reject] if editable else [
+        approve,
+        reject,
+    ]
+    if not new_image:
+        return [row]
+    return [row, [Button("↻ New image", f"{NEW_IMAGE}:{approval_id}")]]
+
+def new_image_keyboard(approval_id: str) -> Keyboard:
+    return [[
+        Button("Say what to change", f"{IMAGE_REASON}:{approval_id}"),
+        Button("Just try again", f"{IMAGE_AGAIN}:{approval_id}"),
+    ]]
+
+def made_images(event: NeedsApproval) -> bool:
+    return any(image.source == "generated" for image in draft_images(event))
 
 def reject_keyboard(approval_id: str) -> Keyboard:
     return [[

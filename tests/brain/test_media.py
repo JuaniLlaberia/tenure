@@ -122,6 +122,7 @@ async def test_voice_note_becomes_the_request(
     assert part["input_audio"]["format"] == "ogg"
     assert base64.b64decode(part["input_audio"]["data"]) == b"OggS voice"
     assert media_calls(llm)[0].model == brain.deps.settings.model_media
+    assert media_calls(llm)[0].reasoning is None
     statuses = [e.status for e in of(events, Progress)]
     assert "Maya is listening to your voice note…" in statuses
 

@@ -207,3 +207,43 @@ async def test_page_has_the_tabs(client, flows, chat):
     page = (await client.get(f"/b/{token}")).text
     for tab in ("home", "drafts", "teams", "schedules", "knowledge", "activity", "spend"):
         assert f'id="t-{tab}"' in page
+
+async def image_post(flows: Flows, thread_id: int) -> None:
+    await say(flows, "We launch our new coaching package on Friday, with an image", thread_id)
+
+async def test_new_image_from_the_dashboard_keeps_the_text(client, flows, chat, store, brain):
+    token, thread_id = await setup(flows, chat, client)
+    await image_post(flows, thread_id)
+    (post,) = await drafts_of(client, token, "post")
+    assert post["new_image"] and post["images"][0]["made"]
+
+    url = f"/b/{token}/api/approvals/{post['approval_id']}/new-image"
+    response = await client.post(url, json={"reason": "Warmer colours"})
+    assert response.status_code == 200
+    await flows.drain()
+
+    (decision,) = brain.decisions
+    assert (decision.decision, decision.reason) == ("new_image", "Warmer colours")
+    (again,) = await drafts_of(client, token, "post")
+    assert again["text"] == post["text"]
+    assert again["images"][0]["file_id"] != post["images"][0]["file_id"]
+
+async def test_new_image_is_refused_without_revisions_left(client, flows, chat, store, brain):
+    token, thread_id = await setup(flows, chat, client)
+    await image_post(flows, thread_id)
+    (post,) = await drafts_of(client, token, "post")
+    approval = await store.get_approval(post["approval_id"])
+    task = await store.get_task(approval.task_id)
+    await store.save_task(task.model_copy(update={"revisions": 2}))
+
+    url = f"/b/{token}/api/approvals/{post['approval_id']}/new-image"
+    response = await client.post(url, json={})
+    assert response.status_code == 409
+    assert "out of revisions" in response.json()["message"]
+    assert brain.decisions == []
+
+async def test_founder_photos_offer_no_new_image(client, flows, chat):
+    token, thread_id = await setup(flows, chat, client)
+    await photo_post(flows, chat, thread_id)
+    (post,) = await drafts_of(client, token, "post")
+    assert not post["new_image"] and not any(i["made"] for i in post["images"])

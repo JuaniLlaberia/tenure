@@ -176,12 +176,15 @@ class RealTools:
     async def web_search(self, query: str, k: int = 5) -> list[SearchResult]:
         results = await self._keenable_search(query, k)
         if results:
+            logger.info("Searched with Keenable: %r, %d results", query, len(results))
             return results
         try:
-            return await self._web.search(query, k)
+            results = await self._web.search(query, k)
         except Exception:
             logger.exception("Web search failed")
             return []
+        logger.info("Searched with DuckDuckGo: %r, %d results", query, len(results))
+        return results
 
     async def _keenable_search(self, query: str, k: int) -> list[SearchResult]:
         if self._keenable is None:

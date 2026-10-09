@@ -220,6 +220,14 @@ def create_api(
             return {"message": "Rejected. The team will revise it and learn from your reason."}
         return {"message": "Rejected and dropped."}
 
+    @api.post("/b/{token}/api/approvals/{approval_id}/new-image")
+    async def new_image(token: str, approval_id: str, body: Reject, request: Request) -> dict:
+        business_id = await business(request, token)
+        await flows.decide_from_dashboard(
+            business_id, approval_id, "new_image", reason=body.reason
+        )
+        return {"message": "A new image is on its way. The text stays as it is."}
+
     @api.post("/b/{token}/api/actions/{action_id}/undo")
     async def undo(token: str, action_id: str, request: Request) -> dict[str, str]:
         await flows.undo_from_dashboard(await business(request, token), action_id)

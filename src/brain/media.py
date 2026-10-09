@@ -106,10 +106,13 @@ async def describe(deps: Deps, business_id: str, file: FileRef) -> MediaText | N
     return MediaText(file=file, text=text)
 
 async def _ask_model(deps: Deps, how: Mode, file: FileRef, data: bytes) -> str:
+    """
+    The media model chooses how much to think: Gemini 3.5 Flash Lite can't turn reasoning off.
+    """
     content = [{"type": "text", "text": PROMPTS[how]}, _part(how, file, data)]
     messages: list[Message] = [{"role": "user", "content": content}]
     try:
-        completion = await deps.llm.complete(deps.settings.model_media, messages, reasoning=False)
+        completion = await deps.llm.complete(deps.settings.model_media, messages)
     except Exception as error:
         log.warning("Media model couldn't read %s: %s", file.file_id, error)
         return ""
