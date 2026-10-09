@@ -4,12 +4,14 @@ from brain.helpers.llm import Message
 from contract import Persona
 
 def specialist_messages(
-    persona: Persona, task_type: str, output: str, brief: str, context: str
+    persona: Persona, task_type: str, output: str, brief: str, context: str, guidance: str = ""
 ) -> list[Message]:
     if output == "notes":
         result = "Your result is notes for the next step: what you found, with the sources."
     else:
         result = f"Your result is the finished {output.replace('_', ' ')}, ready for the founder."
+    if guidance:
+        result += f" It must be: {guidance}"
     system = (
         f"You are {persona.name}, the {persona.role} on a small business's team. "
         "You do one step of a task, then hand your result back to the lead. "

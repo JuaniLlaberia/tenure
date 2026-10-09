@@ -294,7 +294,11 @@ Threshold starts at 0.7 (`DECIDE_THRESHOLD`, tune Thursday). Routing uses its ow
 
 ### Models
 
-All LLM roles start on `deepseek/deepseek-v4-flash-0731` (cheap, supports tools and structured outputs): `MODEL_LEAD`, `MODEL_SPECIALIST`, `MODEL_REFLECT`, `MODEL_DECIDE_FALLBACK`. Each is overridable through its env var.
+All LLM roles start on `deepseek/deepseek-v4-flash-0731` (cheap, supports tools and structured outputs): `MODEL_LEAD`, `MODEL_SPECIALIST`, `MODEL_REFLECT`, `MODEL_DECIDE_FALLBACK`. Each is overridable through its env var, so roles can use different models.
+
+**Reasoning** (`LLM_REASONING`, default `true` = the model's own behaviour). Measured on Oct 9: DeepSeek spent 63–1,257 reasoning tokens on a two-sentence post (5–27 s a call); with `false` the brain sends `reasoning: {enabled: false}` and calls take 3–4 s. One live post request took 149 s with reasoning and 56 s without. Turn it off for testing and the 3-minute demo; leave it on where judgement matters more than speed. Every call has a timeout (`LLM_TIMEOUT`, 60 s, one retry); before that, one call hung for minutes on the SDK's 10-minute default.
+
+**Output guidance:** each output type carries its hard rules in words (`OutputType.guidance`, e.g. "at most 300 characters, aim for about 250"), and the specialist prompt includes them. Without it, the writer only learned the Bluesky limit from failed checks.
 
 ## 10. State sketch
 

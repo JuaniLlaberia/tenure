@@ -41,12 +41,14 @@ class OutputType:
         render: Callable[[BaseModel], str],
         actions: dict[str, Callable[[BaseModel], PlannedAction]] | None = None,
         validate: Validator | None = None,
+        guidance: str = "",
     ):
         self.name = name
         self.schema = schema
         self._render = render
         self._actions = actions or {}
         self._validate = validate
+        self.guidance = guidance
 
     def preview(self, output: BaseModel) -> str:
         return self._render(output)
@@ -124,6 +126,10 @@ OUTPUTS: dict[str, OutputType] = {
         render=lambda output: output.text,
         actions={"post_social": lambda output: PostSocial(text=output.text)},
         validate=_validate_post,
+        guidance=(
+            f"One Bluesky post of at most {POST_LIMIT} characters, counting spaces and line "
+            "breaks; aim for about 250. Plain text, no placeholders."
+        ),
     ),
     "email": OutputType(
         "email",
@@ -135,18 +141,24 @@ OUTPUTS: dict[str, OutputType] = {
             )
         },
         validate=_validate_email,
+        guidance=(
+            "An email with a recipient address (the newsletter address or list from what you "
+            "know), a clear subject line and a plain-text body with one call to action."
+        ),
     ),
     "report": OutputType(
         "report",
         ReportOutput,
         render=lambda output: _render_with_sources(output.summary, output.sources),
         validate=_validate_report,
+        guidance="A short summary for the founder, with a source URL for every claim.",
     ),
     "notes": OutputType(
         "notes",
         NotesOutput,
         render=lambda output: _render_with_sources(output.notes, output.sources),
         validate=_validate_notes,
+        guidance="Notes for the next step of the task: what you found, with the source URLs.",
     ),
 }
 

@@ -57,8 +57,10 @@ class OpenRouterLLM:
             api_key=key.get_secret_value() if key else "missing",
             base_url=settings.openrouter_base_url,
             max_retries=1,
+            timeout=settings.llm_timeout,
             http_client=http_client,
         )
+        self._extra = {} if settings.llm_reasoning else {"reasoning": {"enabled": False}}
 
     async def complete(
         self, model: str, messages: list[Message], tools: list[ToolDef] | None = None
@@ -102,7 +104,7 @@ class OpenRouterLLM:
     async def _create(self, model: str, messages: list[Message], **kwargs):
         try:
             response = await self._client.chat.completions.create(
-                model=model, messages=messages, **kwargs
+                model=model, messages=messages, extra_body=self._extra or None, **kwargs
             )
         except openai.OpenAIError as error:
             raise LLMError(f"{model}: {type(error).__name__}") from error

@@ -56,7 +56,12 @@ def build_specialist_graph(deps: Deps) -> CompiledStateGraph:
         short = brief if len(brief) <= BRIEF_PREVIEW else brief[: BRIEF_PREVIEW - 1] + "…"
         progress(state, f"{state['persona'].name} is working on: {short}")
         messages = specialist_messages(
-            state["persona"], state["task_type"], state["output"], brief, state.get("context", "")
+            state["persona"],
+            state["task_type"],
+            state["output"],
+            brief,
+            state.get("context", ""),
+            OUTPUTS[state["output"]].guidance,
         )
         return {"messages": messages, "pending": [], "steps": 0, "tokens": 0, "result": None}
 

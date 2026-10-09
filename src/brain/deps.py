@@ -21,6 +21,8 @@ class Settings(BaseModel):
     model_reflect: str = "deepseek/deepseek-v4-flash-0731"
     model_decide_fallback: str = "deepseek/deepseek-v4-flash-0731"
     model_jev: str = "typesafe/jev-1.13"
+    llm_reasoning: bool = True
+    llm_timeout: float = 60.0
     decide_threshold: float = 0.7
     route_threshold: float = 0.6
     promotion_confidence: float = 0.8
