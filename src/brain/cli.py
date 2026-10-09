@@ -1,12 +1,15 @@
 import asyncio
+import mimetypes
 from collections.abc import Callable
 from datetime import datetime
+from pathlib import Path
 
 from brain.brain import create_brain
 from brain.checkpoint import open_checkpointer
 from brain.common import new_id, utcnow
 from brain.deps import Settings
-from brain.fakes import FakeTools, InMemoryStore
+from brain.fakes import FakeTools, InMemoryStore, file_kind
+from brain.prompts.lead import cadence_words
 from contract import (
     ActionDone,
     ActionUndone,
@@ -16,6 +19,7 @@ from contract import (
     Brain,
     Error,
     Event,
+    FileRef,
     IncomingMessage,
     LessonLearned,
     NeedsApproval,
@@ -24,18 +28,22 @@ from contract import (
     PromotionOffer,
     PromotionResponse,
     Say,
+    ScheduleSaved,
     Store,
     TeamHired,
 )
 
 HELP = """Commands:
   <text>                 talk in the current topic (General, or the team you switched to)
+  /file <path>           attach a local file (photo, voice note, PDF) to your next message;
+                         an empty line sends the files alone
   /start                 business onboarding with the chief of staff
   /hire <template>       hire a team (it becomes the current topic)
   /team <name>, /general switch topic
   /approve, /edit <text>, /reject [reason]   answer the latest draft
   /accept, /decline      answer the latest promotion offer
   /undo                  undo the latest post (10 minutes)
+  /run <schedule title>  run a schedule now, as the app does when it's due
   /seed <task_type> <n>  demo only: pretend the founder approved n drafts
   /lessons, /tasks, /log show what the store holds
   /help, /quit"""
@@ -88,12 +96,19 @@ class Cli:
     """
 
     def __init__(
-        self, brain: Brain, store: Store, business_id: str, out: Callable[[str], None] = print
+        self,
+        brain: Brain,
+        store: Store,
+        business_id: str,
+        out: Callable[[str], None] = print,
+        tools: FakeTools | None = None,
     ):
         self.brain = brain
         self.store = store
         self.business_id = business_id
         self.out = out
+        self.tools = tools
+        self.files: list[FileRef] = []
         self.team_id: str | None = None
         self.teams: dict[str, str] = {}
         self.approval_id: str | None = None
@@ -113,8 +128,10 @@ class Cli:
         if name == "quit":
             return False
         if name == "say":
-            if arg:
+            if arg or self.files:
                 await self._drain(self.brain.handle_message(self._message(arg)))
+        elif name == "file":
+            self._attach(arg)
         elif name == "start":
             await self._drain(self.brain.start_onboarding(self.business_id))
         elif name == "hire":
@@ -129,6 +146,8 @@ class Cli:
             await self._promote(name == "accept")
         elif name == "undo":
             await self._undo()
+        elif name == "run":
+            await self._run_schedule(arg)
         elif name == "seed":
             await self._seed(arg)
         elif name in ("lessons", "tasks", "log"):
@@ -147,13 +166,39 @@ class Cli:
 
     def _message(self, text: str) -> IncomingMessage:
         self._messages += 1
+        files, self.files = self.files, []
         return IncomingMessage(
             business_id=self.business_id,
             team_id=self.team_id,
             text=text,
             message_id=f"cli-{self._messages}",
             sent_at=utcnow(),
+            attachments=files,
         )
+
+    def _attach(self, arg: str) -> None:
+        """
+        Stores a local file the way the app stores a founder's upload, for the next message.
+        """
+        path = Path(arg).expanduser()
+        if self.tools is None or not arg or not path.is_file():
+            self.out("Usage: /file <path to an existing file>")
+            return
+        data = path.read_bytes()
+        mime_type = mimetypes.guess_type(path.name)[0] or "application/octet-stream"
+        file = FileRef(
+            file_id=new_id(),
+            business_id=self.business_id,
+            kind=file_kind(mime_type),
+            mime_type=mime_type,
+            name=path.name,
+            size_bytes=len(data),
+            source="founder",
+            created_at=utcnow(),
+        )
+        self.tools.add_file(file, data)
+        self.files.append(file)
+        self.out(f"(attached {path.name}; it goes with your next message)")
 
     async def _switch(self, name: str) -> None:
         wanted = name.strip().lower()
@@ -203,6 +248,15 @@ class Cli:
             return
         await self._drain(self.brain.undo_action(self.business_id, self.action_id))
 
+    async def _run_schedule(self, title: str) -> None:
+        wanted = title.strip().lower()
+        schedules = await self.store.list_schedules(self.business_id)
+        match = next((s for s in schedules if wanted and wanted in s.title.lower()), None)
+        if match is None:
+            self.out("No schedule with that title. Ask a team for one, like \"every Monday …\".")
+            return
+        await self._drain(self.brain.run_schedule(self.business_id, match.schedule_id))
+
     async def _seed(self, arg: str) -> None:
         task_type, _, count = arg.partition(" ")
         if self.team_id is None or not count.strip().isdigit():
@@ -243,16 +297,18 @@ class Cli:
     def _format(self, event: Event) -> str:
         who = f"{event.persona.name} ({event.persona.role})" if hasattr(event, "persona") else ""
         if isinstance(event, Say):
-            return f"{who}: {event.text}"
+            return f"{who}: {event.text}{_files(event.media)}"
         if isinstance(event, Progress):
             return f"  … {event.status}"
         if isinstance(event, Ask):
             replies = f"  [{' / '.join(event.quick_replies)}]" if event.quick_replies else ""
             return f"{who}: {event.question}{replies}"
         if isinstance(event, NeedsApproval):
+            action = event.planned_action
+            files = action.images if action is not None else event.media
             return (
                 f"{who}: draft for approval ({event.task_type}, check "
-                f"{event.check_confidence:.2f})\n{event.preview}\n"
+                f"{event.check_confidence:.2f})\n{event.preview}{_files(files)}\n"
                 "  → /approve, /edit <text>, /reject [reason]"
             )
         if isinstance(event, ActionDone):
@@ -272,11 +328,25 @@ class Cli:
         if isinstance(event, TeamHired):
             people = ", ".join(f"{p.name} ({p.role})" for p in event.personas)
             return f"Hired {event.display_name}: {people}"
+        if isinstance(event, ScheduleSaved):
+            schedule = event.schedule
+            state = "" if schedule.active else " (stopped)"
+            return (
+                f"{who}: schedule “{schedule.title}”{state}: "
+                f"{cadence_words(schedule.cadence)} ({schedule.cadence.timezone}) → /run "
+                f"{schedule.title}"
+            )
         if isinstance(event, OnboardingComplete):
             return f"(onboarding complete: {event.scope})"
         if isinstance(event, Error):
             return f"! {event.message}"
         return str(event)
+
+def _files(files: list[FileRef]) -> str:
+    """
+    Images can't show in a terminal: one line per file with what it shows.
+    """
+    return "".join(f"\n  [image {f.file_id[:8]}: {f.alt_text or f.name or f.kind}]" for f in files)
 
 async def run() -> None:
     settings = Settings.from_env()
@@ -285,8 +355,9 @@ async def run() -> None:
         return
     store = InMemoryStore()
     async with open_checkpointer(settings) as checkpointer:
-        brain = create_brain(store, FakeTools(echo=True), settings, checkpointer=checkpointer)
-        cli = Cli(brain, store, business_id=new_id())
+        tools = FakeTools(echo=True)
+        brain = create_brain(store, tools, settings, checkpointer=checkpointer)
+        cli = Cli(brain, store, business_id=new_id(), tools=tools)
         cli.out(HELP)
         while True:
             try:

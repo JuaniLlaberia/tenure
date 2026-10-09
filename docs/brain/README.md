@@ -47,11 +47,11 @@ For every stage:
 | 7 | [Learning](./stage-7-learning.md) | 6 | done |
 | 8 | [Company graph (business onboarding)](./stage-8-company-graph.md) | 6 | done |
 | 9 | [CLI, Postgres checkpointer, end to end](./stage-9-cli-and-e2e.md) | 6–8 | done |
-| 10 | [Voice notes, photos and files in](./stage-10-attachments.md) | 9 | not started |
-| 11 | [Design team and image generation](./stage-11-design-team.md) | 10 | not started |
-| 12 | [Marketing and design on one campaign](./stage-12-campaign-visuals.md) | 11 | not started |
-| 13 | [Avatars](./stage-13-avatars.md) | 11 | not started |
-| 14 | [Schedules](./stage-14-schedules.md) | 9 | not started |
+| 10 | [Voice notes, photos and files in](./stage-10-attachments.md) | 9 | done |
+| 11 | [Design team and image generation](./stage-11-design-team.md) | 10 | done |
+| 12 | [Marketing and design on one campaign](./stage-12-campaign-visuals.md) | 11 | done |
+| 13 | [Avatars](./stage-13-avatars.md) | 11 | done |
+| 14 | [Schedules](./stage-14-schedules.md) | 9 | done |
 
 Statuses: `not started` → `tests written` (red, waiting for review) → `tests approved` → `done`.
 
@@ -68,4 +68,5 @@ Stages 3, 4 and 5 are independent of each other once 1 and 2 are done.
 - Tests are reviewed per stage, in chat. Juan approved the tests of stages 1–4 on Oct 8, reviewing them as they were written, and of stages 5–9 on Oct 9. All tests are now frozen.
 - Commits go to the `brain` branch (Juan OK'd committing on Oct 8). Push only when asked.
 - Contract v0.4, v0.5 and v0.6 agreed by Juan (Oct 9).
-- New settings for stages 10–11: `MODEL_MEDIA` (default `google/gemini-3.5-flash-lite`) and `MODEL_IMAGE` (picked by a live test; candidates in stage 11). No new brain dependencies: the Images API is plain `httpx` (Oct 9).
+- New settings for stages 10–11: `MODEL_MEDIA` (default `google/gemini-3.5-flash-lite`) and `MODEL_IMAGE` (default `google/gemini-3.1-flash-image`; candidates in stage 11). No new brain dependencies: the Images API is plain `httpx` (Oct 9).
+- Stages 10–14 reviewed by Juan (Oct 9). Work happens on the `brain-v06` branch, committed per stage. Live tests are written but run only once the app and brain are connected. Each stage builds only what its own tests need. Changes to Mark's drafts: stage 12 keeps "suggest Design once" in team state, not as a lesson; stage 14 reads a stated timezone from the request.

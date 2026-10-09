@@ -5,9 +5,9 @@ from brain.templates.registries import ACTIONS, OUTPUTS, TOOL_NAMES
 from contract import PostSocial, SendEmail
 
 def test_registry_names():
-    assert set(OUTPUTS) == {"social_post", "email", "report", "notes"}
+    assert set(OUTPUTS) == {"social_post", "email", "report", "notes", "image"}
     assert ACTIONS == {"post_social": "social_post", "send_email": "email"}
-    assert TOOL_NAMES == {"read_memory", "web_search", "fetch_page"}
+    assert TOOL_NAMES == {"read_memory", "web_search", "fetch_page", "generate_image"}
 
 def test_social_post_maps_to_post_social():
     output_type = OUTPUTS["social_post"]

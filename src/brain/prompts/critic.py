@@ -15,5 +15,12 @@ SYSTEM = (
     'Reply as JSON: {"issues": ["..."]}.'
 )
 
-def critic_messages(review: str) -> list[dict]:
-    return [{"role": "system", "content": SYSTEM}, {"role": "user", "content": review}]
+def critic_messages(review: str, images: list[str] | None = None) -> list[dict]:
+    """
+    `images` are data URLs of the draft's images, shown to the critic after the review text.
+    """
+    if not images:
+        return [{"role": "system", "content": SYSTEM}, {"role": "user", "content": review}]
+    parts = [{"type": "text", "text": review}]
+    parts.extend({"type": "image_url", "image_url": {"url": url}} for url in images)
+    return [{"role": "system", "content": SYSTEM}, {"role": "user", "content": parts}]

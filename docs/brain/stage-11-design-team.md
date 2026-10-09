@@ -1,6 +1,6 @@
 # Stage 11: Design team and image generation
 
-**Status:** not started
+**Status:** done
 **Depends on:** stage 10 (for `FakeTools` files and the media map)
 **Spec:** [CONTRACT.md](../CONTRACT.md) §6 (`NeedsApproval.media`, `Say.media`), §9 (`Tools.save_file`), §11 (`FileRef`, `Approval.media`); [ROADMAP.md](../ROADMAP.md) §2
 
@@ -22,7 +22,7 @@ POST https://openrouter.ai/api/v1/images
 
 `GET /api/v1/images/models` lists the models and the parameters each supports; `/api/v1/images/models/{id}/endpoints` gives prices.
 
-**`MODEL_IMAGE` candidates** (prices checked Oct 9). Pick one with a short live test (latency, quality on a launch visual, how well it follows the brand style), as we did for the text models:
+**`MODEL_IMAGE` candidates** (prices checked Oct 9). The default is `google/gemini-3.1-flash-image` (Nano Banana 2): it follows instructions best, takes reference images, and ~$0.08 per image is fine for the demo. It's an env var, so once the app and brain are connected a short live test (latency, quality on a launch visual, how well it follows the brand style) can switch it:
 
 | Model | Price | Notes |
 | --- | --- | --- |
@@ -116,11 +116,23 @@ onboarding:
 
 ## Done when
 
-- [ ] All tests above pass; earlier stages still pass
-- [ ] `ruff check` passes
-- [ ] Live: hire Design, answer onboarding, "Make an image for our Friday launch" → an approval card with the image in Telegram
-- [ ] Juan has reviewed the tests
+- [x] All tests above pass; earlier stages still pass
+- [x] `ruff check` passes
+- [ ] Live (once the app and brain are connected): hire Design, answer onboarding, "Make an image for our Friday launch" → an approval card with the image in Telegram
+- [x] Juan has reviewed the tests
 
 ## Log
 
 - Oct 9: stage written by Mark from the v0.6 planning session. Image API shape and prices checked on OpenRouter the same day.
+- Oct 9: reviewed by Juan. `MODEL_IMAGE` defaults to `google/gemini-3.1-flash-image`; the live comparison waits until everything is connected.
+- Oct 9: implemented on `brain-v06` under a session goal, tests first (red), then green. `tests/brain/test_design.py`: the 9 listed tests plus `test_generate_image_is_limited_per_step`, `test_approved_visuals_become_examples_with_alt_text`, `test_cli_shows_a_drafts_images`, two `OpenRouterImages` tests (request shape, one retry) and the live test. Juan OK'd updating three approved snapshot assertions: `test_registry_names` (OUTPUTS gains `image`, TOOL_NAMES gains `generate_image`), and `test_list_templates` / `test_create_brain_builds_from_env` (`["design", "marketing"]`; the first now reads Maya from `templates[1]`). `MODEL_IMAGE` went to `dev` on its own (01d2875). Choices made while building:
+  - `Deps.images` is optional (`None` in old tests); `create_brain` wraps `OpenRouterImages` in `MeteredImages`.
+  - A step's images travel back from the specialist in its state (`files`, `prompts`), join the task's `media` (with the founder's photos) and its `task_media` entry, so a reject-and-revise still knows them.
+  - `ImageOutput` accepts ids from the task's media (made in this task, or the founder's photos of this request). The output type has `min_images=1`: unknown ids or no image fail the hard check, and a draft that still has no image at the gate fails the task with a recoverable `Error`.
+  - Jev sees "With 1 image: <alt text> (prompt: …)"; the critic gets the image bytes as `image_url` parts (read through `Tools.read_file`), for founder photos in posts too.
+  - The writer's/illustrator's context lists only the founder's photos, so a revise makes a new image instead of reusing the rejected one.
+  - Approved examples add "Images: <alt text>" after the caption. The prompt isn't stored on the `Approval`, so it's not part of the examples.
+  - `design.yaml` adds `limits` (2 tasks, 4 steps, 60k tokens), not in the spec draft.
+  - Reference images: `ImageClient.generate` takes them, but `generate_image` doesn't pass any yet.
+  - The CLI prints a line per image (`[image 1a2b3c4d: alt text]`).
+- Oct 9: Juan reviewed and approved the tests; stage done and committed on `brain-v06`.
