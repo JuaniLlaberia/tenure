@@ -246,3 +246,11 @@ async def test_restart_resets_draft(brain, collect, llm, clear_answers):
     config = {"configurable": {"thread_id": f"{BUSINESS_ID}:company"}}
     state = (await brain.company_graph.aget_state(config)).values
     assert not state["draft"].get("name")
+
+def test_extraction_accepts_null_or_a_single_string_for_lists():
+    found = Extraction.model_validate_json(
+        '{"fields": {"name": "Punto Medio", "main_clients": null, "links": "https://puntomedio.org",'
+        ' "extra": null}, "facts": null}'
+    )
+    assert found.fields.main_clients == [] and found.facts == [] and found.fields.extra == {}
+    assert found.fields.links == ["https://puntomedio.org"]
