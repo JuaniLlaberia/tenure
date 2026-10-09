@@ -78,6 +78,7 @@ async def test_triage_is_one_jev_call_with_team_context(
         "needs_social_post",
         "needs_newsletter",
         "needs_competitor_check",
+        "wants_schedule",
     }
     assert "Post about our Friday launch" in state
     for spec in deps.templates["marketing"].task_types.values():

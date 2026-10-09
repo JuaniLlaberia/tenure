@@ -148,6 +148,7 @@ def script(jev, llm):
                 "is_clear": clear,
                 "passes_check": passes,
                 "names_channels": named,
+                "wants_schedule": 0.1,
             }
         )
         routed = task_types if work >= 0.5 else ()

@@ -1,6 +1,6 @@
 # Stage 10: Voice notes, photos and files in
 
-**Status:** not started
+**Status:** done
 **Depends on:** stage 9; contract v0.6 (agreed Oct 9)
 **Spec:** [CONTRACT.md](../CONTRACT.md) §5 (attachments), §7 (`IncomingMessage.attachments`), §9 (`Tools.read_file`), §11 (`FileRef`); [ROADMAP.md](../ROADMAP.md) §1
 
@@ -17,13 +17,13 @@ The founder can talk instead of type, and show instead of describe.
 
 **Attachments become text before anything decides.** Jev only reads text, so `handle_message` first turns every attachment into a short text block, appended to `msg.text`. TRIAGE, plan, clarify and history then work unchanged.
 
-| Kind | How | Becomes |
-| --- | --- | --- |
-| `audio` | `MODEL_MEDIA` with an `input_audio` part: "Transcribe this voice note word for word" | `[Voice note] <transcript>`. With no caption, the transcript *is* the request |
-| `image` | `MODEL_MEDIA` with an `image_url` data-URL part: "Describe this in one sentence; read out any text in it" | `[Photo f1: <description>]`. The `FileRef` is kept in state as available media |
-| `document`, PDF | `MODEL_MEDIA` with a `file` part: "Extract the text; keep prices, dates and names exact" | `[Document price-list.pdf]\n<text, max ~8,000 chars>` |
-| `document`, other (`text/*`) | Decode as UTF-8, no model | Same as PDF |
-| `video`, unknown | No model | Nothing; the lead adds one `Say`: "I can't watch videos yet; tell me what's in it" |
+| Kind                         | How                                                                                                       | Becomes                                                                            |
+| ---------------------------- | --------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------- |
+| `audio`                      | `MODEL_MEDIA` with an `input_audio` part: "Transcribe this voice note word for word"                      | `[Voice note] <transcript>`. With no caption, the transcript _is_ the request      |
+| `image`                      | `MODEL_MEDIA` with an `image_url` data-URL part: "Describe this in one sentence; read out any text in it" | `[Photo f1: <description>]`. The `FileRef` is kept in state as available media     |
+| `document`, PDF              | `MODEL_MEDIA` with a `file` part: "Extract the text; keep prices, dates and names exact"                  | `[Document price-list.pdf]\n<text, max ~8,000 chars>`                              |
+| `document`, other (`text/*`) | Decode as UTF-8, no model                                                                                 | Same as PDF                                                                        |
+| `video`, unknown             | No model                                                                                                  | Nothing; the lead adds one `Say`: "I can't watch videos yet; tell me what's in it" |
 
 - **One helper, `brain/media.py`:** `describe(deps, business_id, file) -> MediaText | None`, which calls `Tools.read_file` and then the model. A `None` from `read_file` or a model error gives `[Photo f1: couldn't open it]` and the run goes on.
 - **`Progress` before each file:** "Maya is listening to your voice note…", "…looking at your photo…", "…reading your document…".
@@ -57,19 +57,19 @@ The founder can talk instead of type, and show instead of describe.
 
 ## Files
 
-| File | Contains |
-| --- | --- |
-| `src/brain/media.py` | `MediaText`, `describe()`, `attachments_text()` |
-| `src/brain/deps.py` | `model_media` setting |
-| `src/brain/usage.py` | `ROLES["model_media"]` |
-| `src/brain/brain.py` | `handle_message` turns attachments into text first; video `Say` |
-| `src/brain/graphs/team.py` | `media` in `TeamState`, `new_request(..., media)` |
-| `src/brain/context.py`, `prompts/specialist.py` | founder photos in the writer's context |
-| `src/brain/templates/registries.py` | `images: list[str]` on post and email outputs; ids → `FileRef` in `to_planned_action` (now takes the media map) |
-| `src/brain/graphs/company.py` | attachments in onboarding answers |
-| `src/brain/fakes.py` | `FakeTools.save_file`, `read_file` (files in a dict); `post_social` and `send_email` accept and record `images` |
-| `src/brain/cli.py` | `/file <path>` attaches a local file to the next message |
-| `.env.example` | `MODEL_MEDIA` |
+| File                                            | Contains                                                                                                        |
+| ----------------------------------------------- | --------------------------------------------------------------------------------------------------------------- |
+| `src/brain/media.py`                            | `MediaText`, `describe()`, `attachments_text()`                                                                 |
+| `src/brain/deps.py`                             | `model_media` setting                                                                                           |
+| `src/brain/usage.py`                            | `ROLES["model_media"]`                                                                                          |
+| `src/brain/brain.py`                            | `handle_message` turns attachments into text first; video `Say`                                                 |
+| `src/brain/graphs/team.py`                      | `media` in `TeamState`, `new_request(..., media)`                                                               |
+| `src/brain/context.py`, `prompts/specialist.py` | founder photos in the writer's context                                                                          |
+| `src/brain/templates/registries.py`             | `images: list[str]` on post and email outputs; ids → `FileRef` in `to_planned_action` (now takes the media map) |
+| `src/brain/graphs/company.py`                   | attachments in onboarding answers                                                                               |
+| `src/brain/fakes.py`                            | `FakeTools.save_file`, `read_file` (files in a dict); `post_social` and `send_email` accept and record `images` |
+| `src/brain/cli.py`                              | `/file <path>` attaches a local file to the next message                                                        |
+| `.env.example`                                  | `MODEL_MEDIA`                                                                                                   |
 
 ## Tests
 
@@ -88,15 +88,27 @@ The founder can talk instead of type, and show instead of describe.
 - `test_media_survives_a_revision`: reject with a reason → the revised draft can still use `f1`.
 - `test_onboarding_reads_a_document`: a PDF answer fills profile fields.
 - `test_media_usage_is_logged_with_its_purpose`
-- Live, skipped by default: `test_live_transcribes_a_telegram_voice_note` with a short `.ogg` fixture in `tests/brain/fixtures/`.
+- Live, skipped by default: `test_live_transcribes_a_telegram_voice_note` with a short `.ogg` fixture in `tests/brain/fixtures/`. It also skips while the fixture is missing; the live checks run once the app and brain are connected.
 
 ## Done when
 
-- [ ] All tests above pass; earlier stages still pass
-- [ ] `ruff check` passes
-- [ ] Live: a real voice note of "We launch Friday, get the word out" gives the same drafts as typing it
-- [ ] Juan has reviewed the tests
+- [x] All tests above pass; earlier stages still pass
+- [x] `ruff check` passes
+- [ ] Live (once the app and brain are connected): a real voice note of "We launch Friday, get the word out" gives the same drafts as typing it
+- [x] Juan has reviewed the tests
 
 ## Log
 
 - Oct 9: stage written by Mark from the v0.6 planning session. API formats and model prices checked on OpenRouter the same day.
+- Oct 9: reviewed by Juan. Work happens on the `brain-v06` branch. Live tests are written but run only once everything is connected.
+- Oct 9: implemented on `brain-v06` under a session goal, tests first (16 red), then green. `tests/brain/test_media.py`: the 13 listed tests plus `test_another_business_file_is_not_read`, `test_edit_keeps_the_founders_photo`, `test_fake_tools_keep_files_per_business`, `test_cli_attaches_a_file_to_the_next_message` and the live test (skips without its fixture). Choices made while building:
+  - Output schemas name real `file_id`s (no short labels), so stage 11's generated images work the same way.
+  - Only photos the model could describe are offered to the writer; their description becomes the `FileRef.alt_text`, which the check and Bluesky see.
+  - Each task keeps its photos (`TaskState.media`), and `task_media` (last 20 tasks, in the checkpoint) brings them back on a reject-and-revise, even after other requests.
+  - An edit keeps the draft's images (`_edited_action` copies the action).
+  - At `draft_only`, a post's photos go in `NeedsApproval.media` / `Approval.media`.
+  - `execute_action` passes `images` only when there are some, so Mark's `RealTools` keeps working until it takes them.
+  - The specialist stores its result without default values, so an empty `images` doesn't reach earlier-stage tests or later steps' prompts.
+  - No `file-parser` plugin: OpenRouter reads PDFs natively for Gemini by default, so the `LLM` protocol is unchanged.
+  - Not done: a photo sent as the answer to a pending `Ask` is described into the text but not offered to the writer.
+- Oct 9: Juan reviewed and approved the tests; stage done and committed on `brain-v06`.

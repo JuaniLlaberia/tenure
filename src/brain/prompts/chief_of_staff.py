@@ -99,17 +99,21 @@ def extract_messages(
 ) -> list[Message]:
     system = (
         "Pull facts about a solo founder's business out of their answer and, if included, out "
-        "of their website. Fill every field the answer or the website supports, not only the "
-        "one the question asked about: name, what_you_sell, customers, prices (as stated, e.g. "
-        '"packages from $2,500"), tone (how they sound or want to sound), main_clients (named '
-        "clients), links, extra (short key: value pairs). Leave a field null or empty only when "
-        'nothing supports it. Put any other useful fact about the business in "facts" as short '
-        'sentences. Never invent anything. Reply as JSON: {"fields": {...}, "facts": [...]}.'
+        "of their website or the files they sent. Fill every field the answer, the website or a "
+        "file supports, not only the one the question asked about: name, what_you_sell, "
+        'customers, prices (as stated, e.g. "packages from $2,500"), tone (how they sound or '
+        "want to sound), main_clients (named clients), links, extra (short key: value pairs). "
+        "Leave a field null or empty only when nothing supports it. Put any other useful fact "
+        'about the business in "facts" as short sentences. Never invent anything. Reply as '
+        'JSON: {"fields": {...}, "facts": [...]}.'
     )
     user = f"Question: {question}\nAnswer: {answer}"
     for page in pages:
-        title = page.title or "no title"
-        user += f"\n\nWebsite {page.url} ({title}):\n{page.text[:MAX_FETCH_CHARS]}"
+        if page.url.startswith("file:"):
+            source = f"File the founder sent, {page.title}"
+        else:
+            source = f"Website {page.url} ({page.title or 'no title'})"
+        user += f"\n\n{source}:\n{page.text[:MAX_FETCH_CHARS]}"
     user += f"\n\nAlready known: {draft.model_dump(exclude_defaults=True) or 'nothing'}"
     return [{"role": "system", "content": system}, {"role": "user", "content": user}]
 

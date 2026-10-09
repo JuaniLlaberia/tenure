@@ -5,17 +5,21 @@ from typing import Any, Literal, TypeVar
 
 from pydantic import BaseModel
 
-from brain.common import new_id
+from brain.common import new_id, utcnow
+from brain.helpers.images import GeneratedImage, ImageError
 from brain.helpers.jev import JevAnswer, JevError, JevResponse
-from brain.helpers.llm import Completion, LLMError, Message, Structured, ToolDef
+from brain.helpers.llm import Completion, LLMError, Message, Structured, ToolDef, Usage
 from contract import (
     ActionResult,
     Approval,
     AuditEntry,
     BusinessProfile,
+    FileKind,
+    FileRef,
     Lesson,
     ModelUsage,
     PageContent,
+    Schedule,
     SearchResult,
     Task,
     Team,
@@ -42,6 +46,7 @@ class InMemoryStore:
         self.lessons: dict[str, Lesson] = {}
         self.audit: dict[str, AuditEntry] = {}
         self.usage: list[ModelUsage] = []
+        self.schedules: dict[str, Schedule] = {}
 
     async def get_profile(self, business_id: str) -> BusinessProfile | None:
         return _copy(self.profiles.get(business_id))
@@ -113,6 +118,22 @@ class InMemoryStore:
     async def log_usage(self, usage: ModelUsage) -> None:
         self.usage.append(_copy(usage))
 
+    async def save_schedule(self, schedule: Schedule) -> None:
+        self.schedules[schedule.schedule_id] = _copy(schedule)
+
+    async def get_schedule(self, schedule_id: str) -> Schedule | None:
+        return _copy(self.schedules.get(schedule_id))
+
+    async def list_schedules(self, business_id: str, team_id: str | None = None) -> list[Schedule]:
+        found = [
+            schedule
+            for schedule in self.schedules.values()
+            if schedule.business_id == business_id
+            and (team_id is None or schedule.team_id == team_id)
+        ]
+        found.sort(key=lambda schedule: schedule.created_at, reverse=True)
+        return [_copy(schedule) for schedule in found]
+
 class FakeTools:
     """
     The contract Tools without side effects. Records every call; methods in `fail` fail softly.
@@ -129,6 +150,7 @@ class FakeTools:
         self.echo = echo
         self.calls: list[tuple[str, dict]] = []
         self.fail: set[str] = set()
+        self.files: dict[str, tuple[FileRef, bytes]] = {}
         self._posts = 0
 
     def _record(self, method: str, **kwargs) -> bool:
@@ -140,8 +162,11 @@ class FakeTools:
     def _failed(self, method: str) -> ActionResult:
         return ActionResult(action_id=new_id(), ok=False, error=f"{method} failed (fake)")
 
-    async def post_social(self, business_id: str, text: str) -> ActionResult:
-        if not self._record("post_social", business_id=business_id, text=text):
+    async def post_social(
+        self, business_id: str, text: str, images: list[FileRef] | None = None
+    ) -> ActionResult:
+        recorded = _with_images({"business_id": business_id, "text": text}, images)
+        if not self._record("post_social", **recorded):
             return self._failed("post_social")
         self._posts += 1
         return ActionResult(
@@ -156,11 +181,16 @@ class FakeTools:
             return self._failed("delete_social")
         return ActionResult(action_id=new_id(), ok=True)
 
-    async def send_email(self, business_id: str, to: str, subject: str, body: str) -> ActionResult:
-        sent = self._record(
-            "send_email", business_id=business_id, to=to, subject=subject, body=body
-        )
-        if not sent:
+    async def send_email(
+        self,
+        business_id: str,
+        to: str,
+        subject: str,
+        body: str,
+        images: list[FileRef] | None = None,
+    ) -> ActionResult:
+        recorded = {"business_id": business_id, "to": to, "subject": subject, "body": body}
+        if not self._record("send_email", **_with_images(recorded, images)):
             return self._failed("send_email")
         return ActionResult(action_id=new_id(), ok=True)
 
@@ -173,6 +203,59 @@ class FakeTools:
         if not self._record("fetch_page", url=url):
             return None
         return self.pages.get(url)
+
+    def add_file(self, file: FileRef, data: bytes) -> None:
+        """
+        A file the app already stored, like a founder's upload.
+        """
+        self.files[file.file_id] = (file, data)
+
+    async def save_file(
+        self,
+        business_id: str,
+        data: bytes,
+        mime_type: str,
+        name: str | None = None,
+        alt_text: str | None = None,
+    ) -> FileRef | None:
+        saved = self._record(
+            "save_file", business_id=business_id, mime_type=mime_type, name=name, alt_text=alt_text
+        )
+        if not saved:
+            return None
+        file = FileRef(
+            file_id=new_id(),
+            business_id=business_id,
+            kind=file_kind(mime_type),
+            mime_type=mime_type,
+            name=name,
+            size_bytes=len(data),
+            source="generated",
+            alt_text=alt_text,
+            created_at=utcnow(),
+        )
+        self.add_file(file, data)
+        return file
+
+    async def read_file(self, business_id: str, file_id: str) -> bytes | None:
+        if not self._record("read_file", business_id=business_id, file_id=file_id):
+            return None
+        stored = self.files.get(file_id)
+        if stored is None or stored[0].business_id != business_id:
+            return None
+        return stored[1]
+
+def _with_images(recorded: dict, images: list[FileRef] | None) -> dict:
+    """
+    Images are recorded only when there are some, so calls without them look as before.
+    """
+    return {**recorded, "images": list(images)} if images else recorded
+
+def file_kind(mime_type: str) -> FileKind:
+    for kind in (FileKind.IMAGE, FileKind.AUDIO, FileKind.VIDEO):
+        if mime_type.startswith(f"{kind.value}/"):
+            return kind
+    return FileKind.DOCUMENT
 
 @dataclass
 class LLMCall:
@@ -287,3 +370,38 @@ def _jev_answer(value: Any) -> JevAnswer:
     if isinstance(value, str):
         return JevAnswer(type="choice", choice=value, confidence=0.95)
     return JevAnswer(type="noul", noul=float(value))
+
+PNG = bytes.fromhex(
+    "89504e470d0a1a0a0000000d4948445200000004000000040802000000269309290000001349444154789c"
+    "63d48f0d60800126380b2f07002bdb00e4fae499b30000000049454e44ae426082"
+)
+
+class FakeImages:
+    """
+    Scripted image model: always the same 4×4 PNG. Records every call; `fail` raises ImageError.
+    """
+
+    def __init__(self, fail: bool = False, cost: float | None = None):
+        self.fail = fail
+        self.cost = cost
+        self.calls: list[dict] = []
+
+    async def generate(
+        self,
+        model: str,
+        prompt: str,
+        aspect_ratio: str = "1:1",
+        references: list[tuple[bytes, str]] | None = None,
+    ) -> GeneratedImage:
+        self.calls.append(
+            {
+                "model": model,
+                "prompt": prompt,
+                "aspect_ratio": aspect_ratio,
+                "references": list(references or []),
+            }
+        )
+        if self.fail:
+            raise ImageError("fake failure")
+        usage = Usage(output_tokens=1290, cost=self.cost)
+        return GeneratedImage(data=PNG, mime_type="image/png", usage=usage)

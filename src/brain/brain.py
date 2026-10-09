@@ -11,12 +11,30 @@ from brain.flows.hire import hire_team
 from brain.flows.promotion import respond_promotion
 from brain.flows.undo import undo_action
 from brain.graphs.company import CHIEF_OF_STAFF, build_company_graph
-from brain.graphs.team import TeamState, build_team_graph, new_request
+from brain.graphs.team import (
+    TeamState,
+    build_team_graph,
+    cross_step,
+    home_task_type,
+    new_request,
+)
+from brain.helpers.decide import decide
+from brain.helpers.images import ImageClient, OpenRouterImages
 from brain.helpers.jev import Jev, OpenRouterJev
 from brain.helpers.llm import LLM, OpenRouterLLM
 from brain.learning import learn
+from brain.media import (
+    VIDEO_REPLY,
+    MediaText,
+    attachments_text,
+    describe,
+    onboarding_answer,
+    photos,
+    status,
+)
+from brain.prompts.lead import ABOUT_IMAGE
 from brain.templates.loader import load_templates, template_info
-from brain.usage import MeteredJev, MeteredLLM, UsageLog, enter
+from brain.usage import MeteredImages, MeteredJev, MeteredLLM, UsageLog, enter
 from contract import (
     Approval,
     ApprovalDecision,
@@ -24,6 +42,8 @@ from contract import (
     Error,
     Event,
     IncomingMessage,
+    Persona,
+    Progress,
     PromotionResponse,
     Say,
     Store,
@@ -46,6 +66,7 @@ class TenureBrain:
         self.checkpointer = checkpointer or InMemorySaver()
         self.team_graph = build_team_graph(deps, self.checkpointer, learn=self._learn_from_chat)
         self.company_graph = build_company_graph(deps, self.checkpointer)
+        self._image_feedback: dict[str, bool] = {}
 
     def list_templates(self) -> list[TemplateInfo]:
         return [template_info(template) for template in self.deps.templates.values()]
@@ -83,6 +104,40 @@ class TenureBrain:
         async for event in undo_action(self.deps, business_id, action_id):
             yield event
 
+    async def run_schedule(self, business_id: str, schedule_id: str) -> AsyncIterator[Event]:
+        enter(business_id)
+        async for event in guarded(self._run_schedule(business_id, schedule_id)):
+            yield event
+
+    async def _run_schedule(self, business_id: str, schedule_id: str) -> AsyncIterator[Event]:
+        """
+        Runs a schedule's request as a new request in its team, tagged with the schedule. The
+        graph never asks during it: the founder isn't there.
+        """
+        schedule = await self.deps.store.get_schedule(schedule_id)
+        team = await self.deps.store.get_team(schedule.team_id) if schedule else None
+        if (
+            schedule is None
+            or not schedule.active
+            or schedule.business_id != business_id
+            or team is None
+        ):
+            message = "That schedule is stopped or doesn't exist."
+            yield Error(team_id=None, message=message, recoverable=False)
+            return
+        enter(business_id, team.team_id)
+        snapshot = await self.team_graph.aget_state(self._config(team))
+        if snapshot.interrupts:
+            message = "Waiting for your answer first"
+            yield Error(team_id=team.team_id, message=message, recoverable=True)
+            return
+        payload = {
+            **new_request(team, schedule.request, None),
+            "schedule_id": schedule.schedule_id,
+        }
+        async for event in self._run(team, payload):
+            yield event
+
     async def _handle(self, msg: IncomingMessage) -> AsyncIterator[Event]:
         if msg.team_id is None:
             async for event in self._company(msg):
@@ -92,13 +147,40 @@ class TenureBrain:
         if team is None or team.business_id != msg.business_id:
             yield Error(team_id=msg.team_id, message="I couldn't find that team.", recoverable=True)
             return
+        lead = self.deps.templates[team.template].lead.persona
+        described: list[MediaText] = []
+        async for event in self._read(msg, lead, described):
+            yield event
+        text = attachments_text(msg.text, described)
+        if msg.attachments and not text:
+            return
         snapshot = await self.team_graph.aget_state(self._config(team))
         if snapshot.interrupts:
-            payload = Command(resume=msg.text)
+            payload = Command(resume=text)
         else:
-            payload = new_request(team, msg.text, msg.message_id)
+            payload = new_request(team, text, msg.message_id, photos(described))
         async for event in self._run(team, payload):
             yield event
+
+    async def _read(
+        self, msg: IncomingMessage, persona: Persona, found: list[MediaText]
+    ) -> AsyncIterator[Event]:
+        """
+        Turns each attachment into text before anything decides (Jev only reads text), with a
+        status line per file. Videos get one polite reply instead.
+        """
+        videos = False
+        for file in msg.attachments:
+            line = status(persona, file)
+            if line:
+                yield Progress(team_id=msg.team_id, persona=persona, status=line)
+            described = await describe(self.deps, msg.business_id, file)
+            if described is None:
+                videos = True
+            else:
+                found.append(described)
+        if videos:
+            yield Say(team_id=msg.team_id, persona=persona, text=VIDEO_REPLY)
 
     async def _hire(self, business_id: str, template: str) -> AsyncIterator[Event]:
         hired: str | None = None
@@ -131,6 +213,13 @@ class TenureBrain:
     ) -> AsyncIterator[Event]:
         enter(approval.business_id, approval.team_id)
         team = await self.deps.store.get_team(approval.team_id)
+        if source == "reject":
+            image_team = await self._image_team(approval)
+            if image_team is not None:
+                other, task_type = image_team
+                async for event in self._learn_for(other, task_type, team, approval, feedback):
+                    yield event
+                return
         stream = learn(
             self.deps,
             business_id=approval.business_id,
@@ -144,13 +233,74 @@ class TenureBrain:
         async for event in stream:
             yield event
 
+    async def _image_team(self, approval: Approval) -> tuple[Team, str | None] | None:
+        """
+        The other team whose step made this draft's image, and that step's task type there,
+        when the founder's reason is only about the image (one decide() per rejection,
+        remembered for the revision).
+        """
+        task = await self.deps.store.get_task(approval.task_id)
+        cross = cross_step(task.steps) if task else None
+        if cross is None:
+            return None
+        if approval.approval_id not in self._image_feedback:
+            state = f"Feedback on the draft:\n{approval.reason}"
+            decisions = await decide(self.deps, {"about_image": ABOUT_IMAGE}, state)
+            accepted = decisions["about_image"].accepts("yes", self.deps.settings.decide_threshold)
+            self._image_feedback[approval.approval_id] = accepted
+        if not self._image_feedback[approval.approval_id]:
+            return None
+        name, _, specialist_id = task.steps[cross].partition(":")
+        teams = await self.deps.store.list_teams(approval.business_id)
+        other = next((t for t in teams if t.template == name and t.onboarded), None)
+        if other is None or name not in self.deps.templates:
+            return None
+        return other, home_task_type(self.deps.templates[name], specialist_id)
+
+    async def _learn_for(
+        self,
+        other: Team,
+        task_type: str | None,
+        team: Team,
+        approval: Approval,
+        feedback: str,
+    ) -> AsyncIterator[Event]:
+        """
+        Image feedback teaches the team that made the image; the lead here says so.
+        """
+        template = self.deps.templates[other.template]
+        noted = []
+        stream = learn(
+            self.deps,
+            business_id=approval.business_id,
+            team_id=other.team_id,
+            template=template,
+            source="reject",
+            source_ref=approval.approval_id,
+            feedback=feedback,
+            task_type=task_type,
+        )
+        async for event in stream:
+            noted.append(event.text)
+            yield event
+        if noted:
+            lesson = noted[0][0].lower() + noted[0][1:]
+            yield Say(
+                team_id=team.team_id,
+                task_id=approval.task_id,
+                persona=self.deps.templates[team.template].lead.persona,
+                text=f"{template.lead.persona.name} noted that for next time: {lesson}",
+            )
+
     async def _revise(self, approval: Approval, reason: str) -> AsyncIterator[Event]:
         enter(approval.business_id, approval.team_id)
         team = await self.deps.store.get_team(approval.team_id)
+        await self._image_team(approval)
         payload = {
             **new_request(team, "", None),
             "revise": approval.approval_id,
             "feedback": reason,
+            "image_feedback": self._image_feedback.pop(approval.approval_id, None),
         }
         async for event in self._run(team, payload):
             yield event
@@ -179,12 +329,18 @@ class TenureBrain:
             yield event
 
     async def _company(self, msg: IncomingMessage) -> AsyncIterator[Event]:
+        described: list[MediaText] = []
+        async for event in self._read(msg, CHIEF_OF_STAFF, described):
+            yield event
+        text = attachments_text(msg.text, described)
+        if msg.attachments and not text:
+            return
         config = _thread(f"{msg.business_id}:company")
         snapshot = await self.company_graph.aget_state(config)
         if snapshot.interrupts:
-            payload = Command(resume=msg.text)
+            payload = Command(resume=onboarding_answer(msg.text, described))
         else:
-            payload = {"business_id": msg.business_id, "restart": False, "message": msg.text}
+            payload = {"business_id": msg.business_id, "restart": False, "message": text}
         async for event in _stream(self.company_graph, config, payload):
             yield event
 
@@ -211,6 +367,7 @@ def create_brain(
     checkpointer=None,
     llm: LLM | None = None,
     jev: Jev | None = None,
+    images: ImageClient | None = None,
 ) -> TenureBrain:
     """
     What the app calls: real OpenRouter clients by default, settings from the environment.
@@ -224,5 +381,6 @@ def create_brain(
         jev=MeteredJev(jev or OpenRouterJev(settings), usage),
         settings=settings,
         templates=load_templates(),
+        images=MeteredImages(images or OpenRouterImages(settings), usage),
     )
     return TenureBrain(deps, checkpointer)

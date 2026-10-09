@@ -24,6 +24,7 @@ class TaskTypeSpec(BaseModel):
     action: str | None = None
     start_level: AutonomyLevel = AutonomyLevel.ACT_AFTER_APPROVAL
     max_level: AutonomyLevel | None = None
+    with_teams: dict[str, list[str]] = {}
 
 class OnboardingQuestion(BaseModel):
     question: str
@@ -33,6 +34,7 @@ class Limits(BaseModel):
     max_tasks_per_request: int = 3
     max_steps_per_specialist: int = 6
     token_budget: int = 60000
+    max_images_per_request: int = 4
 
 class Template(BaseModel):
     name: str

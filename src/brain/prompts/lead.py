@@ -1,9 +1,13 @@
+from typing import Literal
+
 from pydantic import BaseModel
 
 from brain.helpers.decide import Question
 from brain.helpers.llm import Message
 from brain.templates.models import TaskTypeSpec, Template
-from contract import Task, TaskStatus
+from contract import Cadence, Schedule, Task, TaskStatus
+
+WEEKDAYS = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"]
 
 class TaskPlan(BaseModel):
     task_type: str
@@ -26,6 +30,94 @@ NAMES_CHANNELS = Question.yes_no(
     "Bluesky or social post, a newsletter or an email?",
     yes="Yes: it names at least one channel or format",
     no="No: it asks for a campaign or promotion without saying where",
+)
+
+class ScheduleDraft(BaseModel):
+    """
+    A schedule as the model read it. Anything not said is null; code fills the defaults.
+    """
+
+    title: str | None = None
+    request: str | None = None
+    every: Literal["day", "week", "month"] | None = None
+    weekday: int | None = None
+    day: int | None = None
+    hour: int | None = None
+    minute: int | None = None
+    timezone: str | None = None
+
+WANTS_SCHEDULE = Question.yes_no(
+    "Is the founder asking for something to happen repeatedly, on a schedule (every day, each "
+    "Monday, monthly)?",
+    yes="Yes: they want it to happen again and again",
+    no="No: it's a one-off request, a question or small talk",
+)
+
+STOPS_SCHEDULE = Question.yes_no(
+    "Is the founder asking to stop or pause the schedule, rather than change when it runs or "
+    "what it does?",
+    yes="Stop or pause it",
+    no="Change it",
+)
+
+def changes_question(schedules: list[Schedule]) -> Question:
+    titles = "; ".join(f"“{schedule.title}”" for schedule in schedules)
+    return Question.yes_no(
+        f"Is the founder asking to stop, pause or change one of these schedules: {titles}?",
+        yes="Yes: stop, pause or change a schedule",
+        no="No: something else",
+    )
+
+def which_question(schedules: list[Schedule]) -> Question:
+    options = {
+        f"s{n}": f"{schedule.title} ({cadence_words(schedule.cadence)})"
+        for n, schedule in enumerate(schedules, start=1)
+    }
+    return Question(
+        instructions="Which of these schedules is the founder talking about?",
+        options={**options, "none": "None of them, or it isn't clear"},
+    )
+
+def cadence_words(cadence: Cadence) -> str:
+    """
+    "Every Monday at 9:00", the way the schedule card says it.
+    """
+    time = f"{cadence.hour}:{cadence.minute:02d}"
+    if cadence.every == "week" and cadence.weekday is not None:
+        return f"Every {WEEKDAYS[cadence.weekday]} at {time}"
+    if cadence.every == "month":
+        return f"On day {cadence.day or 1} of every month at {time}"
+    return f"Every day at {time}"
+
+def schedule_messages(
+    template: Template, request: str, current: Schedule | None = None
+) -> list[Message]:
+    system = (
+        _lead_system(template)
+        + "\n\nThe founder wants something done again and again. Read their message as JSON "
+        "with: title (a short label for the schedule card, under 40 characters), request (what "
+        "to do each time, in the founder's words, without the repeat part: no \"every Monday\", "
+        "\"each day\" or \"at 9\"), every (day, week or month), weekday (0 = Monday … 6 = "
+        "Sunday, for weekly), day (1 to 28, for monthly), hour and minute (24-hour local time), "
+        "timezone (an IANA name like Europe/Madrid, only if they name a place or zone). Use null "
+        "for anything they didn't say."
+    )
+    if current is not None:
+        system += (
+            f" They are changing this schedule: “{current.title}”, "
+            f"{cadence_words(current.cadence)}: {current.request}. Give only what they change "
+            "and null for the rest."
+        )
+    return [
+        {"role": "system", "content": system},
+        {"role": "user", "content": f"The founder's message:\n{request}"},
+    ]
+
+ABOUT_IMAGE = Question.yes_no(
+    "Is this feedback only about the image that goes with the draft (its look, colours, subject "
+    "or style), and not about the text?",
+    yes="Only about the image",
+    no="About the text, or both",
 )
 
 IS_CLEAR = Question(

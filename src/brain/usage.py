@@ -10,6 +10,7 @@ from dataclasses import dataclass, replace
 
 from brain.common import new_id
 from brain.deps import Settings
+from brain.helpers.images import GeneratedImage, ImageClient
 from brain.helpers.jev import Jev, JevResponse
 from brain.helpers.llm import LLM, Completion, Message, Structured, T, ToolDef, Usage
 from contract import ModelUsage, Store
@@ -22,6 +23,8 @@ ROLES = {
     "model_reflect": "Learning",
     "model_decide_fallback": "Decision backup",
     "model_critic": "Reviews",
+    "model_media": "Listening and reading",
+    "model_image": "Images",
 }
 
 @dataclass(frozen=True)
@@ -118,3 +121,19 @@ class MeteredJev:
         )
         await self._usage.record(model, usage)
         return response
+
+class MeteredImages:
+    def __init__(self, images: ImageClient, usage: UsageLog) -> None:
+        self._images = images
+        self._usage = usage
+
+    async def generate(
+        self,
+        model: str,
+        prompt: str,
+        aspect_ratio: str = "1:1",
+        references: list[tuple[bytes, str]] | None = None,
+    ) -> GeneratedImage:
+        image = await self._images.generate(model, prompt, aspect_ratio, references)
+        await self._usage.record(model, image.usage)
+        return image

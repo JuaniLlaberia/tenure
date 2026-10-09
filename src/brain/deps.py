@@ -7,6 +7,7 @@ from dotenv import load_dotenv
 from pydantic import BaseModel, SecretStr
 
 from brain.common import utcnow
+from brain.helpers.images import ImageClient
 from brain.helpers.jev import Jev
 from brain.helpers.llm import LLM
 from brain.templates.models import Template
@@ -23,6 +24,8 @@ class Settings(BaseModel):
     model_critic: str = "anthropic/claude-sonnet-5.5"
     model_decide_fallback: str = "deepseek/deepseek-v4-flash-0731"
     model_jev: str = "typesafe/jev-1.13"
+    model_media: str = "google/gemini-3.5-flash-lite"
+    model_image: str = "google/gemini-3.1-flash-image"
     llm_reasoning: bool = True
     llm_timeout: float = 60.0
     decide_threshold: float = 0.7
@@ -55,3 +58,4 @@ class Deps:
     settings: Settings
     templates: dict[str, Template]
     clock: Callable[[], datetime] = utcnow
+    images: ImageClient | None = None
