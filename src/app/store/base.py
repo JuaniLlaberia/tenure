@@ -3,7 +3,17 @@ from typing import Any, Protocol
 
 from pydantic import BaseModel
 
-from contract import Approval, AuditEntry, Lesson, ModelUsage, Store, Task, Trust
+from contract import (
+    Approval,
+    AuditEntry,
+    FileRef,
+    Lesson,
+    ModelUsage,
+    Schedule,
+    Store,
+    Task,
+    Trust,
+)
 
 class TelegramTopic(BaseModel):
     team_id: str
@@ -15,8 +25,9 @@ class TelegramTopic(BaseModel):
 class AppStore(Store, Protocol):
     """
     The contract Store plus what only the app needs: businesses, their Telegram links,
-    dashboard links, the queries behind the dashboard, and removing a replaced team
-    (its topic link, trust, tasks, approvals and team lessons; the audit log stays).
+    dashboard links, the queries behind the dashboard, files with their bytes, due schedules,
+    and removing a replaced team (its topic link, trust, tasks, approvals, team lessons and
+    schedules; the audit log stays).
     """
 
     async def create_business(self, chat_id: int) -> str: ...
@@ -37,6 +48,10 @@ class AppStore(Store, Protocol):
     async def list_all_lessons(self, business_id: str) -> list[Lesson]: ...
     async def list_usage(self, business_id: str, since: datetime) -> list[ModelUsage]: ...
     async def delete_team(self, team_id: str) -> None: ...
+    async def store_file(self, ref: FileRef, data: bytes) -> None: ...
+    async def get_file(self, business_id: str, file_id: str) -> FileRef | None: ...
+    async def file_bytes(self, business_id: str, file_id: str) -> bytes | None: ...
+    async def due_schedules(self, now: datetime) -> list[Schedule]: ...
     async def save_state(self, kind: str, key: str, data: Any) -> None: ...
     async def delete_state(self, kind: str, key: str) -> None: ...
     async def list_state(self) -> list[tuple[str, str, Any]]: ...

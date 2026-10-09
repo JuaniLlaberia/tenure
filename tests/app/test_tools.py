@@ -188,7 +188,7 @@ async def test_real_tools_report_missing_connections():
 
 async def test_real_tools_never_raise():
     class Broken:
-        async def post(self, text):
+        async def post(self, text, images=None):
             raise RuntimeError("bluesky   is down")
 
         async def search(self, query, k):
@@ -260,7 +260,7 @@ class RecordingTools:
         self.calls: list[tuple] = []
         self.fail_posts = fail_posts
 
-    async def post_social(self, business_id, text):
+    async def post_social(self, business_id, text, images=None):
         self.calls.append(("post", text))
         if self.fail_posts:
             return ActionResult(action_id="x1", ok=False, error="Bluesky is down")
@@ -270,7 +270,7 @@ class RecordingTools:
         self.calls.append(("delete", external_id))
         return ActionResult(action_id="x2", ok=True)
 
-    async def send_email(self, business_id, to, subject, body):
+    async def send_email(self, business_id, to, subject, body, images=None):
         self.calls.append(("email", to))
         return ActionResult(action_id="x3", ok=True, external_id="email-1")
 
