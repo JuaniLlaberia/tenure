@@ -5,6 +5,8 @@ from pydantic import BaseModel, Field
 
 from contract.models.actions import PlannedAction
 from contract.models.autonomy import AutonomyLevel
+from contract.models.files import FileRef
+from contract.models.schedules import Schedule
 from contract.models.team import Persona
 
 class Say(BaseModel):
@@ -13,6 +15,7 @@ class Say(BaseModel):
     task_id: str | None = None
     persona: Persona
     text: str
+    media: list[FileRef] = []
 
 class Progress(BaseModel):
     type: Literal["progress"] = "progress"
@@ -37,6 +40,7 @@ class NeedsApproval(BaseModel):
     persona: Persona
     preview: str
     planned_action: PlannedAction | None
+    media: list[FileRef] = []
     check_confidence: float
 
 class ActionDone(BaseModel):
@@ -79,6 +83,12 @@ class TeamHired(BaseModel):
     display_name: str
     personas: list[Persona]
 
+class ScheduleSaved(BaseModel):
+    type: Literal["schedule_saved"] = "schedule_saved"
+    team_id: str
+    persona: Persona
+    schedule: Schedule
+
 class OnboardingComplete(BaseModel):
     type: Literal["onboarding_complete"] = "onboarding_complete"
     scope: Literal["business", "team"]
@@ -100,6 +110,7 @@ Event = Annotated[
     | PromotionOffer
     | LessonLearned
     | TeamHired
+    | ScheduleSaved
     | OnboardingComplete
     | Error,
     Field(discriminator="type"),

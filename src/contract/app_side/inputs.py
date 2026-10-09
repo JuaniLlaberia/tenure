@@ -4,6 +4,7 @@ from typing import Literal
 from pydantic import BaseModel
 
 from contract.models.actions import PlannedAction
+from contract.models.files import FileRef
 
 class IncomingMessage(BaseModel):
     business_id: str
@@ -11,6 +12,7 @@ class IncomingMessage(BaseModel):
     text: str
     message_id: str
     sent_at: datetime
+    attachments: list[FileRef] = []
 
 class ApprovalDecision(BaseModel):
     business_id: str

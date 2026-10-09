@@ -5,6 +5,7 @@ from pydantic import BaseModel
 class Persona(BaseModel):
     name: str
     role: str
+    avatar: str | None = None
 
 class Team(BaseModel):
     team_id: str

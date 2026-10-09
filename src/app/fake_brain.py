@@ -24,6 +24,7 @@ from contract import (
     AuditEntry,
     AutonomyLevel,
     BusinessProfile,
+    Cadence,
     Error,
     Event,
     IncomingMessage,
@@ -38,6 +39,8 @@ from contract import (
     PromotionOffer,
     PromotionResponse,
     Say,
+    Schedule,
+    ScheduleSaved,
     SendEmail,
     Store,
     Task,
@@ -65,6 +68,8 @@ BUSINESS_QUESTIONS = [
     "What do you sell?",
     "Who are your customers?",
 ]
+WEEKDAYS = ["monday", "tuesday", "wednesday", "thursday", "friday", "saturday", "sunday"]
+REPEAT = re.compile(rf"\b(?:every|each) ({'|'.join(WEEKDAYS)}|day|month)\b", re.IGNORECASE)
 FEEDBACK_MARKERS = ("stop ", "don't", "do not", "never", "always", "no more", "please use")
 STEP_VERBS = {
     "researcher": "researching",
@@ -220,6 +225,7 @@ class FakeBrain:
         self._clock = clock
         self._onboarding: dict[str, list[str]] = {}
         self._threads: dict[str, _Thread] = {}
+        self._schedules: dict[str, Schedule] = {}
 
     def list_templates(self) -> list[TemplateInfo]:
         return [template.info() for template in TEMPLATES.values()]
@@ -241,6 +247,9 @@ class FakeBrain:
 
     def undo_action(self, business_id: str, action_id: str) -> AsyncIterator[Event]:
         return self._run(self._undo_action(business_id, action_id), None)
+
+    def run_schedule(self, business_id: str, schedule_id: str) -> AsyncIterator[Event]:
+        return self._run(self._run_schedule(business_id, schedule_id), None)
 
     async def _run(
         self, events: AsyncIterator[Event], team_id: str | None
@@ -314,6 +323,8 @@ class FakeBrain:
             request = f"{ctx.thread.pending_request}\n{text}"
             ctx.thread.pending_request = None
             events = self._work(ctx, request)
+        elif REPEAT.search(text):
+            events = self._schedule(ctx, text)
         elif _is_feedback(text):
             events = self._learn_from_chat(ctx, msg)
         elif len(text.split()) < 4:
@@ -489,6 +500,33 @@ class FakeBrain:
             persona=ctx.lead,
             text="Got it, I'll remember that from now on.",
         )
+
+    async def _schedule(self, ctx: _Ctx, text: str) -> AsyncIterator[Event]:
+        every = REPEAT.search(text).group(1).lower()
+        if every in WEEKDAYS:
+            cadence = Cadence(every="week", weekday=WEEKDAYS.index(every))
+        else:
+            cadence = Cadence(every=every)
+        schedule = Schedule(
+            schedule_id=_new_id(),
+            business_id=ctx.team.business_id,
+            team_id=ctx.team_id,
+            title=_clip(REPEAT.sub("", text).strip(" ,.") or text, 60),
+            request=text,
+            cadence=cadence,
+            created_at=self._clock(),
+        )
+        self._schedules[schedule.schedule_id] = schedule
+        yield ScheduleSaved(team_id=ctx.team_id, persona=ctx.lead, schedule=schedule)
+
+    async def _run_schedule(self, business_id: str, schedule_id: str) -> AsyncIterator[Event]:
+        schedule = self._schedules.get(schedule_id)
+        ctx = await self._context(business_id, schedule.team_id) if schedule else None
+        if schedule is None or ctx is None or not schedule.active:
+            yield Error(team_id=None, message="I can't find that schedule.", recoverable=False)
+            return
+        async for event in self._work(ctx, schedule.request):
+            yield event
 
     def _plan(self, ctx: _Ctx, request: str) -> list[str]:
         if "competitor" in request.lower() and "competitor_check" in ctx.template.task_types:

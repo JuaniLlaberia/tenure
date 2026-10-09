@@ -5,6 +5,7 @@ from typing import Literal
 from pydantic import BaseModel
 
 from contract.models.actions import PlannedAction
+from contract.models.files import FileRef
 
 class TaskStatus(StrEnum):
     PLANNED = "planned"
@@ -26,6 +27,7 @@ class Task(BaseModel):
     current_step: int = 0
     revisions: int = 0
     tokens_used: int = 0
+    schedule_id: str | None = None
     created_at: datetime
     updated_at: datetime
 
@@ -37,6 +39,7 @@ class Approval(BaseModel):
     task_type: str
     preview: str
     planned_action: PlannedAction | None
+    media: list[FileRef] = []
     check_confidence: float
     status: Literal["pending", "approved", "edited", "rejected"] = "pending"
     edited_text: str | None = None

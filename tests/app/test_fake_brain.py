@@ -22,6 +22,7 @@ from contract import (
     PromotionOffer,
     PromotionResponse,
     Say,
+    ScheduleSaved,
     SendEmail,
     TeamHired,
 )
@@ -310,6 +311,8 @@ async def test_a_scripted_session_covers_every_event_type(brain):
     action = of(events, ActionDone)[0]
     seen |= set(map(type, await collect(brain.undo_action(BIZ, action.action_id))))
     seen |= set(map(type, await collect(brain.handle_message(msg("Stop using emojis", team_id)))))
+    weekly = msg("Every Monday, research a topic and propose a newsletter", team_id)
+    seen |= set(map(type, await collect(brain.handle_message(weekly))))
     seen |= set(map(type, await collect(brain.hire_team(BIZ, "nope"))))
     assert seen == set(Event.__origin__.__args__)
 
@@ -369,3 +372,13 @@ async def test_a_new_brain_on_the_same_store_carries_on(brain, store, clock):
     restarted = FakeBrain(store, clock=clock)
     assert of(await approve(restarted, post.approval_id), ActionDone)
     assert len(await drafts(restarted, team_id)) == 2
+
+async def test_a_repeating_request_saves_a_schedule_that_runs_on_demand(brain):
+    team_id = await hired_team(brain)
+    weekly = msg("Every Monday, research a topic and propose a newsletter", team_id)
+    (saved,) = await collect(brain.handle_message(weekly))
+    assert isinstance(saved, ScheduleSaved)
+    assert (saved.schedule.cadence.every, saved.schedule.cadence.weekday) == ("week", 0)
+
+    events = await collect(brain.run_schedule(BIZ, saved.schedule.schedule_id))
+    assert of(events, NeedsApproval)
