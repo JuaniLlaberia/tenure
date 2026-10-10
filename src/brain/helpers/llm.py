@@ -7,6 +7,8 @@ import httpx
 import openai
 from pydantic import BaseModel, ValidationError
 
+from brain.common import OutOfCredits, is_out_of_credits
+
 if TYPE_CHECKING:
     from brain.deps import Settings
 
@@ -164,6 +166,10 @@ class OpenRouterLLM:
             response = await self._client.chat.completions.create(
                 model=model, messages=messages, extra_body=self._body(reasoning), **kwargs
             )
+        except openai.APIStatusError as error:
+            if is_out_of_credits(error.status_code, str(error.message)):
+                raise OutOfCredits(model) from error
+            raise LLMError(f"{model}: {type(error).__name__}") from error
         except openai.OpenAIError as error:
             raise LLMError(f"{model}: {type(error).__name__}") from error
         if not response.choices:

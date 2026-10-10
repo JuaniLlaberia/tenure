@@ -8,8 +8,22 @@ from contract import Error, Event
 log = logging.getLogger(__name__)
 
 GENERIC_ERROR = "Something went wrong on my side. Try again in a moment."
+OUT_OF_CREDITS = (
+    "⚠️ The AI account is out of credits, so the team can't work right now. Top up at "
+    "openrouter.ai, then send your message again."
+)
 MAX_REQUEST_CHARS = 20_000
 CUT = "\n[…cut: the rest of the message was too long]"
+
+class OutOfCredits(BaseException):
+    """
+    OpenRouter refused a call for lack of credits. A BaseException on purpose: the brain's
+    fallbacks (`except Exception`) must not catch it and carry on with other models or rules;
+    it ends the run, and `guarded` turns it into one clear Error.
+    """
+
+def is_out_of_credits(status: int, body: str) -> bool:
+    return status == 402 or "insufficient credits" in body.lower()
 
 def new_id() -> str:
     return str(uuid4())
@@ -32,6 +46,9 @@ async def guarded(events: AsyncIterator[Event], team_id: str | None = None) -> A
     try:
         async for event in events:
             yield event
+    except OutOfCredits:
+        log.error("OpenRouter is out of credits")
+        yield Error(team_id=team_id, message=OUT_OF_CREDITS, recoverable=True)
     except Exception:
         log.exception("Brain stream failed")
         yield Error(team_id=team_id, message=GENERIC_ERROR, recoverable=True)

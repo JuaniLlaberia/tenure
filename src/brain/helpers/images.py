@@ -4,6 +4,7 @@ from typing import TYPE_CHECKING, Protocol
 import httpx
 from pydantic import BaseModel
 
+from brain.common import OutOfCredits, is_out_of_credits
 from brain.helpers.llm import Usage
 
 if TYPE_CHECKING:
@@ -77,6 +78,8 @@ class OpenRouterImages:
                 continue
             if response.status_code == 200:
                 return _parse(response)
+            if is_out_of_credits(response.status_code, response.text):
+                raise OutOfCredits(model)
             problem = f"HTTP {response.status_code}"
         raise ImageError(f"{model}: {problem}")
 
