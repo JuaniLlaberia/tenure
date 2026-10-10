@@ -1,4 +1,4 @@
-# Brain ↔ App Contract (v0.6)
+# Brain ↔ App Contract (v0.7)
 
 This is the agreement between the agent brain (`src/brain/`, owner: Juan) and the app (`src/app/`, owner: Mark).
 If both sides respect it, each can be built and tested alone, and they plug together at merge points.
@@ -9,6 +9,12 @@ If both sides respect it, each can be built and tested alone, and they plug toge
 Both change together: a change to one without the other is a bug, and `tests/contract/` should catch the shape side.
 
 ## 0. Changelog
+
+**v0.7 (Oct 9), proposed by Mark, agreed by Juan.**
+
+| # | Change | Why |
+| --- | --- | --- |
+| 1 | `ApprovalDecision.decision` gains `"new_image"`, with an optional `reason` (§7) | The founder asks for another image while keeping the text. Images are made once, after the lead's review, and only the founder can ask for a new one, so no money goes to images that are thrown away |
 
 **v0.6 (Oct 9), proposed by Mark, agreed by Juan.** Every new field has a default, so v0.5 code keeps working; each feature can ship or be dropped on its own. The plan and the split of the work are in [ROADMAP.md](./ROADMAP.md).
 
@@ -297,10 +303,10 @@ The app shows `planned_action.images` if there is an action, otherwise `media`. 
 | --- | --- | --- |
 | `business_id` | `str` | Business |
 | `approval_id` | `str` | From `NeedsApproval` |
-| `decision` | `"approve" \| "edit" \| "reject"` | The founder's choice |
+| `decision` | `"approve" \| "edit" \| "reject" \| "new_image"` | The founder's choice |
 | `edited_text` | `str \| None` | Required for `edit`: the new post text, or the new email body |
 | `edited_action` | `PlannedAction \| None` | Optional for `edit`: the founder's whole version of the action, same `tool` as the draft's. Set when more than the text changed (an email's `subject` or `to`, or an image removed); its text or body always equals `edited_text`. Its `images` are a subset of the draft's: the founder can remove images, not add them |
-| `reason` | `str \| None` | Optional for `reject`; with a reason the team revises and learns |
+| `reason` | `str \| None` | Optional for `reject`; with a reason the team revises and learns. Optional for `new_image`: what to change in the image |
 
 What each decision does (plain code in the brain, outside the graph):
 
@@ -310,6 +316,9 @@ What each decision does (plain code in the brain, outside the graph):
 | `edit` | Runs `edited_action` if given, otherwise the planned action with `edited_text`; streak → 0, reflects on the diff → `LessonLearned` |
 | `reject` + `reason` | Streak → 0, reflects → `LessonLearned`, the task is revised once with the reason → new `NeedsApproval` with a new `approval_id` (if revisions are left) |
 | `reject`, no reason | Streak → 0, task → `REJECTED` |
+| `new_image` | Only for drafts with an image the team made. Streak → 0; with a reason, reflects → `LessonLearned` for the team that made the image; the image is planned again, reviewed and made once, the text stays → new `NeedsApproval` with a new `approval_id`. Out of revisions: a recoverable `Error`, and the draft stays pending |
+
+**Images are made once.** The team plans a draft's images while it works, and the lead's review judges the text and the image plans together. Images are made only after the review passes, right before `NeedsApproval`. Automatic revisions never make a new image; only the founder does, through `new_image` or a rejection whose reason is about the image.
 
 Resolving an approval that isn't `pending` yields a recoverable `Error`.
 

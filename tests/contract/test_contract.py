@@ -253,3 +253,11 @@ def test_task_remembers_its_schedule():
         updated_at=NOW,
     )
     assert Task.model_validate_json(task.model_dump_json()).schedule_id == "s1"
+
+def test_new_image_is_a_decision_with_an_optional_reason():
+    plain = ApprovalDecision(business_id="b1", approval_id="a1", decision="new_image")
+    assert plain.reason is None
+    warmer = ApprovalDecision(
+        business_id="b1", approval_id="a1", decision="new_image", reason="Warmer colours"
+    )
+    assert ApprovalDecision.model_validate_json(warmer.model_dump_json()) == warmer

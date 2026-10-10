@@ -25,7 +25,7 @@ The founder can talk instead of type, and show instead of describe.
 | `document`, other (`text/*`) | Decode as UTF-8, no model                                                                                 | Same as PDF                                                                        |
 | `video`, unknown             | No model                                                                                                  | Nothing; the lead adds one `Say`: "I can't watch videos yet; tell me what's in it" |
 
-- **One helper, `brain/media.py`:** `describe(deps, business_id, file) -> MediaText | None`, which calls `Tools.read_file` and then the model. A `None` from `read_file` or a model error gives `[Photo f1: couldn't open it]` and the run goes on.
+- **One helper, `brain/media.py`:** `describe(deps, business_id, file) -> MediaText | None`, which calls `Tools.read_file` and then the model. A `None` from `read_file` or a model error gives `[Photo f1: couldn't open it]` and the run goes on. A voice note that can't be heard gets a `Say`: "I couldn't hear your voice note. Could you send it again, or type it?"; with no caption and nothing else readable, the run doesn't start.
 - **`Progress` before each file:** "Maya is listening to your voice note…", "…looking at your photo…", "…reading your document…".
 - **Usage** goes through `MeteredLLM` automatically. Add `"model_media": "Listening and reading"` to `ROLES` in `usage.py`.
 - **Founder photos in posts:**

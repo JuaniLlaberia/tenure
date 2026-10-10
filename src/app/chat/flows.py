@@ -73,7 +73,9 @@ DASHBOARD_FOOTERS = {
     "approve": ui.APPROVED_ON_DASHBOARD,
     "edit": ui.EDITED_ON_DASHBOARD,
     "reject": ui.REJECTED_ON_DASHBOARD,
+    "new_image": ui.NEW_IMAGE_ON_DASHBOARD,
 }
+REVISIONS_INCLUDED = 2
 
 Events = Callable[[], AsyncIterator[Event]]
 Tap = Callable[[int, int, str], Coroutine[Any, Any, str | None]]
@@ -161,6 +163,9 @@ class Flows:
             reports.LOWER_NO: self._tap_lower_no,
             reports.THRESHOLD: self._tap_threshold,
             reports.PAGE_TO: self._tap_page,
+            ui.NEW_IMAGE: self._tap_new_image,
+            ui.IMAGE_REASON: self._tap_image_reason,
+            ui.IMAGE_AGAIN: self._tap_image_again,
             ui.EDIT_FIELD: self._tap_edit_field,
             ui.EDIT_APPROVE: self._tap_edit_approve,
             ui.EDIT_MORE: self._tap_edit_more,
@@ -479,7 +484,7 @@ class Flows:
         self,
         business_id: str,
         approval_id: str,
-        decision: Literal["approve", "edit", "reject"],
+        decision: Literal["approve", "edit", "reject", "new_image"],
         reason: str | None = None,
         edited_text: str | None = None,
         edited_action: PlannedAction | None = None,
@@ -498,6 +503,8 @@ class Flows:
         busy = handled and not prompts and approval_id not in self._state.edits
         if approval.status != "pending" or busy or approval_id in self._deciding:
             raise Refused("That draft is already being handled.")
+        if decision == "new_image" and not await self.revisions_left(approval.task_id):
+            raise Refused(ui.NO_REVISIONS_LEFT)
         chat_id = self._chat_for(business_id)
         self._deciding.add(approval_id)
         for where in prompts:
@@ -514,7 +521,7 @@ class Flows:
             edited_action=edited_action,
         )
         task = self._track(self._decide_and_release(chat_id, approval.team_id, resolution))
-        if decision != "reject":
+        if decision in ("approve", "edit"):
             await asyncio.wait({task}, timeout=DASHBOARD_WAIT)
 
     @property
@@ -966,7 +973,7 @@ class Flows:
         thread_id = self._thread_for(event.team_id)
         images = ui.draft_images(event)
         editable = event.planned_action is not None or not event.media
-        keyboard = ui.approval_keyboard(event.approval_id, editable)
+        keyboard = ui.approval_keyboard(event.approval_id, editable, ui.made_images(event))
         above = partial(ui.approval_text, event)
         message_id, text = await self._send_with_images(
             chat_id, thread_id, business_id, images, above(False), keyboard, above
@@ -974,7 +981,7 @@ class Flows:
         self._state.approvals[event.approval_id] = ApprovalCard(
             chat_id, thread_id, message_id, text, keyboard,
             business_id=business_id, team_id=event.team_id, approval_id=event.approval_id,
-            persona=event.persona, action=event.planned_action,
+            persona=event.persona, action=event.planned_action, task_id=event.task_id,
         )
 
     async def _render_action(self, chat_id: int, business_id: str, event: ActionDone) -> None:
@@ -1157,8 +1164,46 @@ class Flows:
             self._decide(card, "edit", edited_text=text)
             return
         del self._state.pending[(chat_id, thread_id)]
+        if pending.kind == "image":
+            await self._close(card, f"{ui.NEW_IMAGE_REQUESTED}: {text}")
+            self._decide(card, "new_image", reason=text)
+            return
         await self._close(card, ui.REJECTED)
         self._decide(card, "reject", reason=text)
+
+    async def revisions_left(self, task_id: str | None) -> bool:
+        task = await self._store.get_task(task_id) if task_id else None
+        return task is None or task.revisions < REVISIONS_INCLUDED
+
+    async def _tap_new_image(self, chat_id: int, message_id: int, approval_id: str) -> str | None:
+        card = self._state.approvals.get(approval_id)
+        if card is None:
+            return ui.GONE
+        if not await self.revisions_left(card.task_id):
+            return ui.NO_REVISIONS_LEFT
+        await self._close(card, ui.NEW_IMAGE_ASK, ui.new_image_keyboard(approval_id))
+        return None
+
+    async def _tap_image_reason(
+        self, chat_id: int, message_id: int, approval_id: str
+    ) -> str | None:
+        card = self._state.approvals.get(approval_id)
+        if card is None:
+            return ui.GONE
+        await self._close(card, ui.NEW_IMAGE_WAITING)
+        self._state.pending[(card.chat_id, card.thread_id)] = Pending("image", approval_id)
+        await self._chat.send(card.chat_id, card.thread_id, ui.IMAGE_REASON_PROMPT)
+        return None
+
+    async def _tap_image_again(
+        self, chat_id: int, message_id: int, approval_id: str
+    ) -> str | None:
+        card = self._state.approvals.get(approval_id)
+        if card is None:
+            return ui.GONE
+        await self._close(card, ui.NEW_IMAGE_REQUESTED)
+        self._decide(card, "new_image")
+        return None
 
     async def _tap_approve(self, chat_id: int, message_id: int, approval_id: str) -> str | None:
         card = self._state.approvals.get(approval_id)

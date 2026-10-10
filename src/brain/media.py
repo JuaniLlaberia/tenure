@@ -15,6 +15,7 @@ Mode = Literal["audio", "image", "pdf", "text", "unsupported"]
 
 UNREADABLE = "couldn't open it"
 VIDEO_REPLY = "I can't watch videos yet; tell me what's in it."
+UNHEARD_REPLY = "I couldn't hear your voice note. Could you send it again, or type it?"
 TEXT_TYPES = ("application/json", "application/csv", "application/xml")
 AUDIO_FORMATS = {
     "ogg": "ogg",
@@ -106,10 +107,13 @@ async def describe(deps: Deps, business_id: str, file: FileRef) -> MediaText | N
     return MediaText(file=file, text=text)
 
 async def _ask_model(deps: Deps, how: Mode, file: FileRef, data: bytes) -> str:
+    """
+    The media model chooses how much to think: Gemini 3.5 Flash Lite can't turn reasoning off.
+    """
     content = [{"type": "text", "text": PROMPTS[how]}, _part(how, file, data)]
     messages: list[Message] = [{"role": "user", "content": content}]
     try:
-        completion = await deps.llm.complete(deps.settings.model_media, messages, reasoning=False)
+        completion = await deps.llm.complete(deps.settings.model_media, messages)
     except Exception as error:
         log.warning("Media model couldn't read %s: %s", file.file_id, error)
         return ""
@@ -159,6 +163,23 @@ def attachments_text(text: str, described: list[MediaText]) -> str:
         else:
             parts.append(block(item))
     return "\n\n".join(parts)
+
+def unheard(described: list[MediaText]) -> bool:
+    """
+    A voice note that couldn't be transcribed.
+    """
+    return any(mode(item.file) == "audio" and not item.text for item in described)
+
+def nothing_heard(text: str, described: list[MediaText]) -> bool:
+    """
+    No caption and only voice notes that couldn't be transcribed: nothing for the team to act
+    on, so the run doesn't start.
+    """
+    return (
+        not text.strip()
+        and bool(described)
+        and all(mode(item.file) == "audio" and not item.text for item in described)
+    )
 
 def photos(described: list[MediaText]) -> dict[str, FileRef]:
     """

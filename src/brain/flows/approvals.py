@@ -75,6 +75,8 @@ async def _resolve(
         steps = _approve(deps, ctx)
     elif decision.decision == "edit":
         steps = _edit(deps, ctx, decision.edited_text, decision.edited_action, learn)
+    elif decision.decision == "new_image":
+        steps = _new_image(deps, ctx, (decision.reason or "").strip(), learn, revise)
     else:
         steps = _reject(deps, ctx, (decision.reason or "").strip(), learn, revise)
     async for event in steps:
@@ -223,12 +225,44 @@ def _show(action: PlannedAction | None, text: str) -> str:
         return f"To: {action.to}\nSubject: {action.subject}\n\n{action.body}"
     return text
 
+NEW_IMAGE = "Make a different image."
+
+async def _new_image(
+    deps: Deps,
+    ctx: Context,
+    reason: str,
+    learn: LearnHook | None,
+    revise: ReviseHook | None,
+) -> AsyncIterator[Event]:
+    """
+    The founder asks for another image: the draft's text stays, the image is planned again,
+    reviewed and made once. Like a rejection with a reason, but only an image the founder
+    asked about is ever made again. Out of revisions, the draft stays as it is.
+    """
+    approval = ctx.approval
+    action = approval.planned_action
+    images = approval.media or (action.images if action else [])
+    if not any(image.source == "generated" for image in images):
+        message = "This draft has no image I made, so there's none to redo."
+        yield Error(team_id=approval.team_id, message=message, recoverable=True)
+        return
+    if ctx.task.revisions >= MAX_REVISIONS or revise is None:
+        yield Error(
+            team_id=approval.team_id,
+            message="I'm out of revisions on this one. Approve it as it is, or reject it.",
+            recoverable=True,
+        )
+        return
+    async for event in _reject(deps, ctx, reason or NEW_IMAGE, learn, revise, teach=bool(reason)):
+        yield event
+
 async def _reject(
     deps: Deps,
     ctx: Context,
     reason: str,
     learn: LearnHook | None,
     revise: ReviseHook | None,
+    teach: bool = True,
 ) -> AsyncIterator[Event]:
     approval = ctx.approval
     now = deps.clock()
@@ -237,7 +271,7 @@ async def _reject(
     )
     await deps.store.save_approval(rejected)
     await deps.store.set_trust(reset_streak(ctx.trust, now))
-    if reason and learn is not None:
+    if reason and teach and learn is not None:
         feedback = f"Draft:\n{approval.preview}\n\nRejected because: {reason}"
         async for event in learn(rejected, "reject", feedback):
             yield event

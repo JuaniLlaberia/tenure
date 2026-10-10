@@ -38,6 +38,7 @@ class SpecialistState(TypedDict, total=False):
     result: dict | None
     files: list[FileRef]
     prompts: dict[str, str]
+    aspects: dict[str, str]
     image_calls: int
     image_limit: int
     memory_team_id: str
@@ -80,6 +81,7 @@ def build_specialist_graph(deps: Deps) -> CompiledStateGraph:
             "result": None,
             "files": [],
             "prompts": {},
+            "aspects": {},
             "image_calls": 0,
         }
 
@@ -117,6 +119,7 @@ def build_specialist_graph(deps: Deps) -> CompiledStateGraph:
             image_limit=state.get("image_limit", MAX_IMAGE_CALLS),
             files=list(state.get("files") or []),
             prompts=dict(state.get("prompts") or {}),
+            aspects=dict(state.get("aspects") or {}),
             image_calls=state.get("image_calls", 0),
         )
         replies = []
@@ -128,6 +131,7 @@ def build_specialist_graph(deps: Deps) -> CompiledStateGraph:
             "pending": [],
             "files": ctx.files,
             "prompts": ctx.prompts,
+            "aspects": ctx.aspects,
             "image_calls": ctx.image_calls,
         }
 

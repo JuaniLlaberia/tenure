@@ -221,8 +221,8 @@ async def test_image_feedback_reruns_only_the_illustrator(
     assert len(runs_of(llm, "Otto")) == ottos + 1
     assert "Warmer colours in the image" in prompt_text(runs_of(llm, "Otto")[-1])
 
-async def test_text_feedback_reruns_writer_then_illustrator(
-    brain, collect, jev, llm, campaign, marketing, design, message
+async def test_text_feedback_reruns_the_writer_and_keeps_the_image(
+    brain, collect, jev, llm, images, campaign, marketing, design, message
 ):
     campaign()
     jev.answers["about_image"] = 0.1
@@ -231,7 +231,9 @@ async def test_text_feedback_reruns_writer_then_illustrator(
 
     events = await reject(brain, collect, needs, "Mention the 20% discount")
 
-    assert of(events, NeedsApproval)
+    (again,) = of(events, NeedsApproval)
+    assert again.planned_action.images == needs.planned_action.images
+    assert len(images.calls) == 1
     rerun = [
         "Leo" if "You are Leo" in system_of(call.messages) else "Otto"
         for call in llm.calls[before:]
@@ -239,7 +241,32 @@ async def test_text_feedback_reruns_writer_then_illustrator(
         and any(f"You are {n}" in system_of(call.messages) for n in ("Leo", "Otto"))
         and not any(m.get("role") == "tool" for m in call.messages)
     ]
-    assert rerun == ["Leo", "Otto"]
+    assert rerun == ["Leo"]
+
+async def test_failed_reviews_never_make_extra_images(
+    brain, collect, jev, images, campaign, marketing, design, message
+):
+    campaign(passes=[0.1, 0.1, 0.9])
+    jev.answers["about_image"] = [0.9, 0.1]
+
+    (needs,), _ = await draft(brain, collect, message, marketing)
+
+    assert len(images.calls) == 1
+    assert len(needs.planned_action.images) == 1
+
+async def test_a_review_after_a_text_revision_never_redraws(
+    brain, collect, jev, llm, images, campaign, marketing, design, message
+):
+    campaign()
+    jev.answers["about_image"] = 0.1
+    (needs,), _ = await draft(brain, collect, message, marketing)
+    jev.answers["passes_check"] = [0.1, 0.9]
+    jev.answers["about_image"] = lambda state: 0.1 if "discount" in state else 0.9
+
+    events = await reject(brain, collect, needs, "Mention the 20% discount")
+
+    assert of(events, NeedsApproval)
+    assert len(images.calls) == 1
 
 async def test_check_feedback_about_the_image_reruns_only_the_illustrator(
     brain, collect, jev, llm, campaign, marketing, design, message

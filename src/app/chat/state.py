@@ -39,6 +39,7 @@ class ApprovalCard(Card):
     approval_id: str
     persona: Persona
     action: PlannedAction | None
+    task_id: str | None = None
 
 @dataclass
 class ActionCard(Card):
@@ -82,7 +83,7 @@ class ScheduleCard(Card):
 
 @dataclass
 class Pending:
-    kind: Literal["edit", "reason", "text", "subject", "to"]
+    kind: Literal["edit", "reason", "image", "text", "subject", "to"]
     approval_id: str
 
 @dataclass

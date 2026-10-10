@@ -19,6 +19,7 @@ from brain.flows.approvals import MAX_REVISIONS
 from brain.flows.autonomy import gate
 from brain.graphs.specialist import build_specialist_graph, run_specialist
 from brain.helpers.decide import decide
+from brain.helpers.images import ImageError
 from brain.prompts.lead import (
     ABOUT_IMAGE,
     HAS_FEEDBACK,
@@ -43,7 +44,7 @@ from brain.prompts.lead import (
 from brain.reasoning import NEEDS_REASONING, needs_reasoning, wants_reasoning
 from brain.templates.models import SpecialistSpec, TaskTypeSpec, Template
 from brain.templates.registries import MAX_IMAGES, OUTPUTS
-from brain.tools import MAX_IMAGE_CALLS
+from brain.tools import MAX_IMAGE_CALLS, is_plan
 from brain.usage import enter_task
 from contract import (
     ActionDone,
@@ -57,6 +58,7 @@ from contract import (
     Lesson,
     NeedsApproval,
     OnboardingComplete,
+    Persona,
     Progress,
     Say,
     Schedule,
@@ -80,6 +82,9 @@ class TaskState(BaseModel):
     reasoning: bool = False
     media: dict[str, FileRef] = {}
     prompts: dict[str, str] = {}
+    aspects: dict[str, str] = {}
+    rendered: bool = False
+    redraw: bool = False
 
 class TeamState(TypedDict, total=False):
     business_id: str
@@ -220,8 +225,9 @@ def build_team_graph(
             deps, f"Task: {task.title}\nBrief: {task.brief}\n\n{feedback[0]}"
         )
         past = (state.get("past_tasks") or {}).get(task.task_id)
+        redraw = rerun is not None
         if past is None:
-            return TaskState(task=task, feedback=feedback, reasoning=reasoning)
+            return TaskState(task=task, feedback=feedback, reasoning=reasoning, redraw=redraw)
         return TaskState.model_validate(past).model_copy(
             update={
                 "task": task,
@@ -229,6 +235,7 @@ def build_team_graph(
                 "feedback": feedback,
                 "check_confidence": None,
                 "reasoning": reasoning,
+                "redraw": redraw,
             }
         )
 
@@ -792,6 +799,10 @@ def build_team_graph(
         task = ts.task
         step = task.current_step
         step_id = task.steps[step]
+        if ":" in step_id and ts.rendered and not ts.redraw:
+            task = await save(task, current_step=step + 1)
+            phase = "check" if step + 1 >= len(task.steps) else "work"
+            return {"tasks": put(state, ts.model_copy(update={"task": task, "phase": phase}))}
         run = await resolve_step(state, task)
         if run is None:
             log.warning("Skipping step %s: its team isn't hired and ready", step_id)
@@ -849,6 +860,7 @@ def build_team_graph(
                 "phase": "check" if step + 1 >= len(task.steps) else "work",
                 "media": {**ts.media, **made},
                 "prompts": {**ts.prompts, **(final.get("prompts") or {})},
+                "aspects": {**ts.aspects, **(final.get("aspects") or {})},
             }
         )
         return {"tasks": put(state, ts), "tokens_used": state.get("tokens_used", 0) + used}
@@ -878,7 +890,7 @@ def build_team_graph(
         """
         steps = ts.task.steps
         cross = cross_step(steps)
-        if cross is None:
+        if cross is None or (ts.rendered and not ts.redraw):
             return last_own_step(steps), 0
         state = "Feedback on the draft:\n" + "\n".join(f"- {item}" for item in feedback)
         decisions = await decide(deps, {"about_image": ABOUT_IMAGE}, state)
@@ -935,10 +947,83 @@ def build_team_graph(
             ts = ts.model_copy(update={"task": task, "phase": "work", "feedback": result.feedback})
         return {"tasks": put(state, ts), "tokens_used": tokens}
 
+    def drawer(state: TeamState, ts: TaskState, file_id: str) -> Persona:
+        """
+        The specialist whose step planned this image, for the "drawing" progress line.
+        """
+        template = template_of(state)
+        for step_id in ts.task.steps:
+            if file_id not in (ts.outputs.get(step_id) or {}).get("images", []):
+                continue
+            name, _, specialist_id = step_id.rpartition(":")
+            home = deps.templates.get(name) if name else template
+            if home is not None and specialist_id in home.specialists:
+                return home.specialists[specialist_id].persona
+        return template.lead.persona
+
+    async def render(state: TeamState, ts: TaskState) -> TaskState:
+        """
+        Makes the draft's planned images, once: here, after the lead's review passed, so a
+        revision never pays for an image that's thrown away. A planned image that can't be
+        made is dropped; a draft that needs one then fails at the gate.
+        """
+        plans = {file_id: file for file_id, file in ts.media.items() if is_plan(file)}
+        if not plans:
+            return ts
+        enter_task(ts.task.task_id)
+        wanted = getattr(final_output(template_of(state), ts), "images", [])
+        made: dict[str, FileRef] = {}
+        for file_id in [f for f in wanted if f in plans]:
+            plan = plans[file_id]
+            persona = drawer(state, ts, file_id)
+            subject = plan.alt_text or "the image"
+            emit(
+                Progress(
+                    team_id=state["team_id"],
+                    task_id=ts.task.task_id,
+                    persona=persona,
+                    status=f"{persona.name} is drawing: {subject}",
+                )
+            )
+            prompt = ts.prompts.get(file_id) or subject
+            try:
+                image = await deps.images.generate(
+                    deps.settings.model_image, prompt, ts.aspects.get(file_id, "1:1")
+                )
+                file = await deps.tools.save_file(
+                    state["business_id"], image.data, image.mime_type, alt_text=plan.alt_text
+                )
+            except (ImageError, AttributeError) as error:
+                log.warning("Couldn't make planned image %s: %s", file_id, error)
+                file = None
+            if file is not None:
+                made[file_id] = file
+
+        def swap(ids: list[str]) -> list[str]:
+            return [made[i].file_id if i in made else i for i in ids if i not in plans or i in made]
+
+        outputs = {
+            step_id: {**output, "images": swap(output["images"])} if "images" in output else output
+            for step_id, output in ts.outputs.items()
+        }
+        media = {k: v for k, v in ts.media.items() if k not in plans}
+        media.update({file.file_id: file for file in made.values()})
+        prompts = {made[k].file_id if k in made else k: v for k, v in ts.prompts.items()}
+        return ts.model_copy(
+            update={
+                "outputs": outputs,
+                "media": media,
+                "prompts": {k: v for k, v in prompts.items() if k not in plans},
+                "aspects": {},
+                "rendered": True,
+                "redraw": False,
+            }
+        )
+
     async def gate_node(state: TeamState) -> dict:
         template = template_of(state)
         lead = template.lead.persona
-        ts = load(state, state["current"])
+        ts = await render(state, load(state, state["current"]))
         task = ts.task
         task_spec = template.task_types[task.task_type]
         output_type = OUTPUTS[task_spec.output]

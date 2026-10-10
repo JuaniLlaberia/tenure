@@ -268,6 +268,7 @@ class FakeBrain:
         self._threads: dict[str, _Thread] = {}
         self._schedules: dict[str, Schedule] = {}
         self._media: dict[str, list[FileRef]] = {}
+        self._wording: dict[str, int] = {}
 
     def list_templates(self) -> list[TemplateInfo]:
         return [template.info() for template in TEMPLATES.values()]
@@ -681,7 +682,8 @@ class FakeBrain:
         brief = task.brief
         images = self._media.get(task.task_id, [])
         if task.task_type == "social_post":
-            opener = POST_OPENERS[task.revisions % len(POST_OPENERS)]
+            wording = self._wording.get(task.task_id, task.revisions)
+            opener = POST_OPENERS[wording % len(POST_OPENERS)]
             action = PostSocial(text=_clip(f"{opener} {brief}", POST_LIMIT), images=images)
         elif task.task_type == "newsletter":
             action = SendEmail(
@@ -843,6 +845,8 @@ class FakeBrain:
             events = self._approve(ctx, task, approval)
         elif decision.decision == "edit":
             events = self._edit(ctx, task, approval, decision)
+        elif decision.decision == "new_image":
+            events = self._new_image(ctx, task, approval, decision.reason)
         else:
             events = self._reject(ctx, task, approval, decision.reason)
         async for event in events:
@@ -935,6 +939,32 @@ class FakeBrain:
         async for event in self._lesson(ctx, task, lesson, "edit", approval.approval_id):
             yield event
 
+    async def _new_image(
+        self, ctx: _Ctx, task: Task, approval: Approval, reason: str | None
+    ) -> AsyncIterator[Event]:
+        images = approval.media or (
+            approval.planned_action.images if approval.planned_action else []
+        )
+        if not any(image.source == "generated" for image in images):
+            message = "This draft has no image I made, so there's none to redo."
+            yield Error(team_id=task.team_id, message=message, recoverable=True)
+            return
+        if task.revisions >= MAX_REVISIONS:
+            message = "I'm out of revisions on this one. Approve it as it is, or reject it."
+            yield Error(team_id=task.team_id, message=message, recoverable=True)
+            return
+        await self._resolve(approval, "rejected", reason=reason or "Make a different image.")
+        await self._set_streak(ctx, task.task_type, 0)
+        if reason:
+            async for event in self._lesson(ctx, task, reason, "reject", approval.approval_id):
+                yield event
+        self._wording.setdefault(task.task_id, task.revisions)
+        task.revisions += 1
+        await self._save_status(task, TaskStatus.IN_PROGRESS)
+        self._media[task.task_id] = await self._images_for(task, "a new image", [])
+        async for event in self._gate(ctx, task):
+            yield event
+
     async def _reject(
         self, ctx: _Ctx, task: Task, approval: Approval, reason: str | None
     ) -> AsyncIterator[Event]:
@@ -961,6 +991,7 @@ class FakeBrain:
             )
             return
         task.revisions += 1
+        self._wording.pop(task.task_id, None)
         await self._save_status(task, TaskStatus.IN_PROGRESS)
         writer = ctx.template.specialists.get(task.steps[-1], ctx.lead)
         yield Progress(

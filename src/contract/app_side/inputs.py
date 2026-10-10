@@ -17,7 +17,7 @@ class IncomingMessage(BaseModel):
 class ApprovalDecision(BaseModel):
     business_id: str
     approval_id: str
-    decision: Literal["approve", "edit", "reject"]
+    decision: Literal["approve", "edit", "reject", "new_image"]
     edited_text: str | None = None
     edited_action: PlannedAction | None = None
     reason: str | None = None

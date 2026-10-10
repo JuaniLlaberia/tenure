@@ -16,7 +16,7 @@ from brain.helpers.jev import OpenRouterJev
 from brain.helpers.llm import Completion, OpenRouterLLM, ToolCall
 from brain.templates.loader import load_templates
 from brain.templates.registries import ImageOutput
-from brain.tools import BRAIN_TOOLS, MAX_IMAGE_CALLS, ToolContext
+from brain.tools import BRAIN_TOOLS, MAX_IMAGE_CALLS, PLAN_PREFIX, ToolContext, is_plan
 from brain.usage import MeteredImages, MeteredJev, MeteredLLM, UsageLog
 from contract import (
     Approval,
@@ -141,29 +141,37 @@ async def test_design_template_loads_and_is_hireable(brain, collect):
     assert isinstance(events[-1], Ask)
     assert "colours" in events[-1].question
 
-async def test_generate_image_saves_the_file_with_alt_text(deps, tools, images):
+async def test_generate_image_only_plans_the_image(deps, tools, images):
     ctx = ToolContext(deps=deps, business_id="b1", team_id="t1", task_type="visual")
 
     reply = await BRAIN_TOOLS["generate_image"].run(
         ctx, {"prompt": PROMPT, "aspect_ratio": "16:9", "alt_text": ALT}
     )
 
+    assert images.calls == []
+    assert not [name for name, _ in tools.calls if name == "save_file"]
+    (file,) = ctx.files
+    assert is_plan(file) and file.alt_text == ALT
+    assert reply.startswith(f"Saved image {file.file_id}: {ALT}")
+    assert ctx.prompts == {file.file_id: PROMPT}
+    assert ctx.aspects == {file.file_id: "16:9"}
+
+async def test_the_planned_image_is_made_once_after_review(
+    brain, collect, deps, tools, images, design, team, message
+):
+    needs, events = await first_draft(brain, collect, message, team)
+
     (call,) = images.calls
     assert (call["model"], call["prompt"], call["aspect_ratio"]) == (
         deps.settings.model_image,
         PROMPT,
-        "16:9",
+        "1:1",
     )
     (saved,) = [kwargs for name, kwargs in tools.calls if name == "save_file"]
-    assert (saved["business_id"], saved["mime_type"], saved["alt_text"]) == (
-        "b1",
-        "image/png",
-        ALT,
-    )
-    (file,) = ctx.files
-    assert reply == f"Saved image {file.file_id}: {ALT}"
-    assert await tools.read_file("b1", file.file_id) == PNG
-    assert ctx.prompts == {file.file_id: PROMPT}
+    assert (saved["business_id"], saved["alt_text"]) == (team.business_id, ALT)
+    (image,) = needs.media
+    assert not is_plan(image) and await tools.read_file(team.business_id, image.file_id) == PNG
+    assert any("is drawing" in e.status for e in of(events, Progress))
 
 async def test_generate_image_is_limited_per_step(deps, images):
     ctx = ToolContext(
@@ -223,8 +231,6 @@ async def test_image_failure_is_a_tool_error_not_a_crash(
     assert not of(events, NeedsApproval)
     errors = of(events, Error)
     assert errors and all(error.recoverable for error in errors)
-    replies = [tool_replies(call.messages) for call in llm.calls if call.kind == "structured"]
-    assert any("Tool error" in reply for reply in replies)
     task_ids = {e.task_id for e in events if getattr(e, "task_id", None)}
     statuses = [(await deps.store.get_task(task_id)).status for task_id in task_ids]
     assert statuses == [TaskStatus.FAILED]
@@ -247,15 +253,68 @@ def test_image_output_needs_one_to_four_known_images():
     assert hard_validate("image", ImageOutput(images=list(made), caption="Hi"), made)
     assert hard_validate("image", ImageOutput(images=["made-up"], caption="Hi"), made)
 
-async def test_critic_sees_the_image_on_revise(brain, collect, jev, llm, design, team, message):
-    jev.answers["passes_check"] = [0.1, 0.9]
+async def test_review_judges_the_image_prompt_before_any_image_is_made(
+    brain, collect, jev, llm, images, tools, design, team, message
+):
+    jev.answers["passes_check"] = [0.1, 0.1, 0.9]
 
     await first_draft(brain, collect, message, team)
 
     critics = [call for call in llm.calls if call.schema and call.schema.__name__ == "CriticReport"]
-    (critic,) = critics
-    assert has_image_part(critic.messages)
+    assert len(critics) == 2
+    assert not any(has_image_part(critic.messages) for critic in critics)
+    assert all(PROMPT in str(critic.messages) for critic in critics)
     assert "Make the colours warmer" in illustrator_prompts(llm)[-1]
+    assert len(images.calls) == 1
+    reads = [kwargs["file_id"] for method, kwargs in tools.calls if method == "read_file"]
+    assert not any(file_id.startswith(PLAN_PREFIX) for file_id in reads)
+
+async def test_new_image_makes_exactly_one_more(
+    brain, collect, images, tools, design, team, message
+):
+    needs, _ = await first_draft(brain, collect, message, team)
+    decision = ApprovalDecision(
+        business_id=team.business_id, approval_id=needs.approval_id, decision="new_image"
+    )
+
+    events = await collect(brain.resolve_approval(decision))
+
+    (again,) = of(events, NeedsApproval)
+    assert len(images.calls) == 2
+    assert again.media[0].file_id != needs.media[0].file_id
+    assert not of(events, LessonLearned)
+
+async def test_new_image_with_a_reason_teaches_the_design_team(
+    brain, collect, llm, images, design, team, message
+):
+    llm.structured_responses["ReflectOutput"] = WARMER
+    needs, _ = await first_draft(brain, collect, message, team)
+    decision = ApprovalDecision(
+        business_id=team.business_id,
+        approval_id=needs.approval_id,
+        decision="new_image",
+        reason="Warmer colours, no people",
+    )
+
+    events = await collect(brain.resolve_approval(decision))
+
+    assert of(events, LessonLearned) and of(events, NeedsApproval)
+    assert "Warmer colours, no people" in illustrator_prompts(llm)[-1]
+
+async def test_new_image_needs_an_image_and_revisions_left(
+    brain, collect, deps, images, design, team, message
+):
+    needs, _ = await first_draft(brain, collect, message, team)
+    task = await deps.store.get_task(needs.task_id)
+    await deps.store.save_task(task.model_copy(update={"revisions": 2}))
+    decision = ApprovalDecision(
+        business_id=team.business_id, approval_id=needs.approval_id, decision="new_image"
+    )
+
+    (error,) = await collect(brain.resolve_approval(decision))
+
+    assert isinstance(error, Error) and "out of revisions" in error.message
+    assert (await deps.store.get_approval(needs.approval_id)).status == "pending"
 
 async def test_image_usage_is_logged_with_its_cost(
     deps, store, llm, jev, clock, collect, design, images, team, message
