@@ -74,6 +74,14 @@ TIMEZONE_QUESTION = "Last one: which city's time should the team use for posts a
 TIMEZONE_SKIP = "Skip (Los Angeles time)"
 TIMEZONE_SET = "Got it: {city} time."
 PROFILE_UPDATED = "Updated your profile: {summary}"
+CHANGED_QUESTION = "What changed about your business?"
+CHANGE_PHRASES = {
+    "name": "the business is called {value}",
+    "what_you_sell": "you sell {value}",
+    "customers": "your customers are {value}",
+    "prices": "prices are {value}",
+    "tone": "you sound {value}",
+}
 
 UPDATES_PROFILE = Question.yes_no(
     "Does the founder's message tell new or changed facts about their business: its name, what "

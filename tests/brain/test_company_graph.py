@@ -266,6 +266,38 @@ async def test_general_message_after_onboarding_gets_one_say(brain, collect, dep
     assert events[0].team_id is None
     assert "Juan's Studio" in question_prompts(llm)[0]
 
+async def test_a_change_in_general_updates_the_profile(brain, collect, deps, jev, llm):
+    await deps.store.save_profile(PROFILE)
+    jev.answers["updates_profile"] = 0.9
+    llm.structured_responses["Extraction"] = extraction(what_you_sell="Logos and gift cards")
+    llm.structured_responses["TimezoneAnswer"] = {
+        "city": "Buenos Aires",
+        "timezone": "America/Argentina/Buenos_Aires",
+    }
+
+    events = await collect(
+        brain.handle_message(general("We now sell gift cards too. And I'm in Buenos Aires."))
+    )
+
+    assert [e.text for e in events if isinstance(e, Say)] == [
+        "Updated your profile: you sell Logos and gift cards. Times now use Buenos Aires time."
+    ]
+    profile = await deps.store.get_profile(BUSINESS_ID)
+    assert profile.what_you_sell == "Logos and gift cards"
+    assert profile.extra["timezone"] == "America/Argentina/Buenos_Aires"
+    assert profile.name == "Juan's Studio"
+    assert question_prompts(llm) == []
+
+async def test_a_question_in_general_leaves_the_profile_alone(brain, collect, deps, jev, llm):
+    await deps.store.save_profile(PROFILE)
+    jev.answers["updates_profile"] = 0.1
+
+    events = await collect(brain.handle_message(general("What should I post this week?")))
+
+    assert [type(e) for e in events] == [Say]
+    assert not any(call.schema is Extraction for call in llm.calls)
+    assert await deps.store.get_profile(BUSINESS_ID) == PROFILE
+
 async def test_start_onboarding_when_already_onboarded(brain, collect, deps, llm):
     await deps.store.save_profile(PROFILE)
 

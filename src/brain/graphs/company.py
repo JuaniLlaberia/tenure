@@ -13,12 +13,16 @@ from brain.deps import Deps
 from brain.helpers.decide import decide
 from brain.prompts.chief_of_staff import (
     ANSWER_CLEAR,
+    CHANGE_PHRASES,
+    CHANGED_QUESTION,
     PLACEHOLDERS,
+    PROFILE_UPDATED,
     SKIPPED,
     TIMEZONE_QUESTION,
     TIMEZONE_SET,
     TIMEZONE_SKIP,
     TOPICS,
+    UPDATES_PROFILE,
     Extraction,
     ProfileDraft,
     TimezoneAnswer,
@@ -116,6 +120,22 @@ def is_complete(
     if any(not getattr(draft, field) and field not in skipped for field in REQUIRED):
         return False
     return bool(draft.tone) or asked_tone or turns >= MAX_TURNS or "tone" in skipped
+
+def changes_summary(before: ProfileDraft, after: ProfileDraft, city: str | None) -> str:
+    """
+    What a profile update changed, in the founder's words: "you sell X and Y. Times now use
+    Buenos Aires time."
+    """
+    phrases = [
+        CHANGE_PHRASES[field].format(value=getattr(after, field))
+        for field in CHANGE_PHRASES
+        if getattr(after, field) and getattr(after, field) != getattr(before, field)
+    ]
+    sentences = ["; ".join(phrases) + "."] if phrases else []
+    if city and after.extra.get("timezone") != before.extra.get("timezone"):
+        sentences.append(f"Times now use {city} time.")
+    summary = " ".join(sentences)
+    return summary[:1].lower() + summary[1:]
 
 def with_placeholders(draft: ProfileDraft) -> ProfileDraft:
     """
@@ -339,10 +359,61 @@ def build_company_graph(deps: Deps, checkpointer) -> CompiledStateGraph:
         )
         return {"onboarded": True}
 
+    async def update_profile(profile: BusinessProfile, message: str) -> str | None:
+        """
+        A message in General that changes facts about the business updates the profile
+        (timezone included); returns what changed, or None.
+        """
+        decisions = await decide(
+            deps, {"updates_profile": UPDATES_PROFILE}, f"The founder wrote:\n{message}"
+        )
+        if not decisions["updates_profile"].accepts("yes", deps.settings.decide_threshold):
+            return None
+        draft = ProfileDraft.model_validate(profile.model_dump(exclude={"business_id"}))
+        try:
+            result = await deps.llm.structured(
+                deps.settings.model_lead,
+                extract_messages(CHANGED_QUESTION, message, [], draft),
+                Extraction,
+                reasoning=False,
+            )
+            found = result.value
+        except Exception as error:
+            log.warning("Profile update extraction failed: %s", error)
+            found = Extraction(fields=ProfileDraft())
+        merged = merge(draft, found.fields, [])
+        zone = await resolve_timezone(deps, message)
+        if zone is not None:
+            merged = merged.model_copy(update={"extra": {**merged.extra, "timezone": zone[1]}})
+        summary = changes_summary(draft, merged, zone[0] if zone else None)
+        if not summary:
+            return None
+        await deps.store.save_profile(
+            BusinessProfile(business_id=profile.business_id, **merged.model_dump())
+        )
+        for fact in found.facts:
+            await deps.store.save_lesson(
+                Lesson(
+                    lesson_id=new_id(),
+                    business_id=profile.business_id,
+                    team_id=None,
+                    kind="fact",
+                    text=fact,
+                    source="chat",
+                    created_at=deps.clock(),
+                )
+            )
+        return PROFILE_UPDATED.format(summary=summary)
+
     async def chief_reply(state: CompanyState) -> dict:
         profile = await deps.store.get_profile(state["business_id"])
         teams = await deps.store.list_teams(state["business_id"])
         message = state.get("message") or ""
+        if profile is not None and message.strip():
+            updated = await update_profile(profile, message)
+            if updated:
+                emit(Say(team_id=None, persona=CHIEF_OF_STAFF, text=updated))
+                return {}
         messages = reply_messages(CHIEF_OF_STAFF, profile, teams, list(deps.templates), message)
         reasoning, _ = await needs_reasoning(deps, f"The founder wrote:\n{message}")
         completion = await deps.llm.complete(
