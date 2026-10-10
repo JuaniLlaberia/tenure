@@ -24,6 +24,11 @@ USER_AGENT = (
 TEXT_LIMIT = 20_000
 MAX_BYTES = 2_000_000
 MAX_REDIRECTS = 5
+BARE_DOMAIN = re.compile(r"^(?:[a-z0-9-]+\.)+[a-z]{2,}(?::\d+)?(?:[/?#]\S*)?$", re.IGNORECASE)
+PDF_NOTE = (
+    "This link is a PDF document, which can't be read from a link. Ask the founder to send "
+    "the file in Telegram instead."
+)
 
 class _Results(HTMLParser):
     def __init__(self) -> None:
@@ -115,8 +120,17 @@ def html_to_text(html: str) -> tuple[str | None, str]:
     title = " ".join(parser.title.split()) or None
     return title, text
 
+def full_url(url: str) -> str:
+    """
+    A link as people type it ("mysite.com/pricing") with https:// added; anything else as is.
+    """
+    url = url.strip()
+    if "://" not in url and BARE_DOMAIN.match(url):
+        return f"https://{url}"
+    return url
+
 async def is_public(url: str) -> bool:
-    parsed = urlparse(url)
+    parsed = urlparse(full_url(url))
     if parsed.scheme not in ("http", "https") or not parsed.hostname:
         return False
     try:
@@ -128,6 +142,11 @@ async def is_public(url: str) -> bool:
         return False
     addresses = {info[4][0] for info in infos}
     return bool(addresses) and all(ipaddress.ip_address(a).is_global for a in addresses)
+
+def _is_pdf(content_type: str, url: str) -> bool:
+    if "pdf" in content_type:
+        return True
+    return "html" not in content_type and urlparse(url).path.lower().endswith(".pdf")
 
 class Web:
     def __init__(
@@ -144,7 +163,11 @@ class Web:
         return parse_results(response.text, k)
 
     async def fetch(self, url: str) -> PageContent | None:
-        current = url
+        """
+        The page as clean text, or None when it can't be opened. A PDF gives a short note
+        saying why it wasn't read, so the team can ask for the file instead.
+        """
+        current = full_url(url)
         for _ in range(MAX_REDIRECTS + 1):
             if not await self._check_address(current):
                 return None
@@ -155,6 +178,8 @@ class Web:
                 if response.status_code >= 400:
                     return None
                 kind = response.headers.get("content-type", "")
+                if _is_pdf(kind, current):
+                    return PageContent(url=current, title="PDF document", text=PDF_NOTE)
                 if "html" not in kind and "text" not in kind:
                     return None
                 body = b""

@@ -2,6 +2,7 @@
 Builds the dashboard's JSON from the store: one call returns everything the page shows.
 """
 
+import asyncio
 from datetime import datetime, timedelta
 from typing import Any
 
@@ -22,6 +23,7 @@ from contract import (
     Task,
     Team,
     TemplateInfo,
+    Trust,
 )
 
 WEEK = timedelta(days=7)
@@ -53,17 +55,19 @@ async def build_overview(
     deciding: frozenset[str] = frozenset(),
     running: frozenset[str] = frozenset(),
 ) -> dict[str, Any]:
-    profile = await store.get_profile(business_id)
     templates = {t.name: t for t in brain.list_templates()}
-    teams = await store.list_teams(business_id)
+    profile, teams, tasks, approvals, actions, lessons, usage, schedules = await asyncio.gather(
+        store.get_profile(business_id),
+        store.list_teams(business_id),
+        store.list_tasks(business_id),
+        store.list_approvals(business_id),
+        store.list_actions(business_id),
+        store.list_all_lessons(business_id),
+        store.list_usage(business_id, now - WEEK),
+        store.list_schedules(business_id),
+    )
     team_names = {team.team_id: team.display_name for team in teams}
     team_by_id = {team.team_id: team for team in teams}
-    tasks = await store.list_tasks(business_id)
-    approvals = await store.list_approvals(business_id)
-    actions = await store.list_actions(business_id)
-    lessons = await store.list_all_lessons(business_id)
-    usage = await store.list_usage(business_id, now - WEEK)
-    schedules = await store.list_schedules(business_id)
     titles = {task.task_id: task.title for task in tasks}
     by_approval = {a.approval_id: a for a in approvals}
     leads = {
@@ -72,14 +76,19 @@ async def build_overview(
         if team.template in templates and templates[team.template].personas
     }
     pending = [a for a in approvals if a.status == "pending" and a.approval_id not in deciding]
+    team_trust = await asyncio.gather(*(store.list_trust(team.team_id) for team in teams))
+    trust = {team.team_id: rows for team, rows in zip(teams, team_trust, strict=True)}
+    context = await _draft_context(store, pending, tasks)
     return {
         "business": {"name": profile.name if profile else "Your business"},
         "lead": next(iter(leads.values())).name if len(leads) == 1 else None,
         "stats": {**_stats(tasks, approvals, actions, usage, now), "waiting": len(pending)},
         "spend": _spend(usage),
-        "teams": [await _team(store, team, templates.get(team.template)) for team in teams],
+        "teams": [
+            _team(team, templates.get(team.template), trust[team.team_id]) for team in teams
+        ],
         "drafts": [
-            await _draft(store, a, approvals, team_by_id, templates) for a in pending
+            _draft(a, approvals, team_by_id, templates, trust, context) for a in pending
         ],
         "tasks": [_task(task, team_names) for task in tasks],
         "lessons": [_lesson(lesson, team_names, leads) for lesson in lessons],
@@ -161,8 +170,25 @@ def _word(word: str) -> str:
         return word.upper()
     return word.capitalize()
 
-async def _team(store: AppStore, team: Team, template: TemplateInfo | None) -> dict[str, Any]:
-    trust = await store.list_trust(team.team_id)
+async def _draft_context(
+    store: AppStore, pending: list[Approval], tasks: list[Task]
+) -> dict[str, Any]:
+    """
+    What the waiting drafts need beyond the overview's lists, fetched in parallel: tasks too
+    old for the task list, and the lessons for each team and task type once.
+    """
+    known = {task.task_id: task for task in tasks}
+    missing = sorted({a.task_id for a in pending} - set(known))
+    scopes = sorted({(a.business_id, a.team_id, a.task_type) for a in pending})
+    found, rules = await asyncio.gather(
+        asyncio.gather(*(store.get_task(task_id) for task_id in missing)),
+        asyncio.gather(*(store.list_lessons(*scope) for scope in scopes)),
+    )
+    known.update({task.task_id: task for task in found if task})
+    return {"tasks": known, "rules": dict(zip(scopes, rules, strict=True))}
+
+def _team(team: Team, template: TemplateInfo | None, trust: list[Trust]) -> dict[str, Any]:
+    trust = list(trust)
     order = template.task_types if template else []
     trust.sort(key=lambda t: order.index(t.task_type) if t.task_type in order else len(order))
     return {
@@ -184,19 +210,22 @@ async def _team(store: AppStore, team: Team, template: TemplateInfo | None) -> d
         ],
     }
 
-async def _draft(
-    store: AppStore,
+def _draft(
     approval: Approval,
     approvals: list[Approval],
     teams: dict[str, Team],
     templates: dict[str, TemplateInfo],
+    trusts: dict[str, list[Trust]],
+    context: dict[str, Any],
 ) -> dict[str, Any]:
     team = teams.get(approval.team_id)
     template = templates.get(team.template) if team else None
     personas = template.personas if template else []
-    task = await store.get_task(approval.task_id)
-    trust = await store.get_trust(approval.team_id, approval.task_type)
-    rules = await store.list_lessons(approval.business_id, approval.team_id, approval.task_type)
+    task = context["tasks"].get(approval.task_id)
+    trust = next(
+        (t for t in trusts.get(approval.team_id, []) if t.task_type == approval.task_type), None
+    )
+    rules = context["rules"][(approval.business_id, approval.team_id, approval.task_type)]
     rejected = [
         a for a in approvals
         if a.task_id == approval.task_id and a.status == "rejected" and a.reason

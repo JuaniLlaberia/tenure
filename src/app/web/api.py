@@ -11,8 +11,10 @@ from collections.abc import Callable
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any
+from uuid import UUID
 
 from fastapi import FastAPI, HTTPException, Request, Response
+from fastapi.exceptions import RequestValidationError
 from fastapi.responses import FileResponse, HTMLResponse, JSONResponse
 from pydantic import BaseModel, Field
 
@@ -31,6 +33,16 @@ GONE = "This dashboard link isn't valid or was turned off. Send /dashboard for a
 EMAIL = re.compile(r"[^@\s]+@[^@\s]+\.[^@\s]+")
 POST_LIMIT = 300
 LOCKED = "Too many wrong tries. Wait 5 minutes, or send /dashboard for a new password."
+BAD_REQUEST = "That request didn't look right. Reload the page and try again."
+MISSING = {
+    "draft": "That draft doesn't exist anymore. It may have been handled in Telegram.",
+    "file": "That file isn't here anymore.",
+    "action": "That post or email isn't in the activity anymore.",
+    "schedule": "That schedule doesn't exist anymore.",
+    "lesson": "The team doesn't know that anymore.",
+    "team": "That team doesn't exist anymore.",
+}
+RASTER = ("image/png", "image/jpeg", "image/webp", "image/gif")
 
 class Login(BaseModel):
     password: str
@@ -94,6 +106,30 @@ def _edited(planned: PlannedAction | None, body: Approve) -> PlannedAction | Non
         return version
     return None
 
+def _known(value: str, what: str) -> str:
+    """
+    Ids are uuids; anything else is a link to something that isn't there.
+    """
+    try:
+        UUID(value)
+    except ValueError:
+        raise HTTPException(404, MISSING[what]) from None
+    return value
+
+def _file_headers(mime_type: str) -> dict[str, str]:
+    """
+    Founder files are served so they can't run as pages on the dashboard's origin: only
+    raster images show inline, everything else downloads.
+    """
+    headers = {
+        "Cache-Control": "private, max-age=3600",
+        "X-Content-Type-Options": "nosniff",
+        "Content-Security-Policy": "sandbox",
+    }
+    if mime_type not in RASTER:
+        headers["Content-Disposition"] = "attachment"
+    return headers
+
 def _utcnow() -> datetime:
     return datetime.now(UTC)
 
@@ -123,6 +159,10 @@ def create_api(
     @api.exception_handler(Refused)
     async def refused(request: Request, error: Refused) -> JSONResponse:
         return JSONResponse({"message": str(error)}, status_code=409)
+
+    @api.exception_handler(RequestValidationError)
+    async def malformed(request: Request, error: RequestValidationError) -> JSONResponse:
+        return JSONResponse({"message": BAD_REQUEST}, status_code=422)
 
     async def access(token: str) -> tuple[str, str]:
         found = await store.dashboard_access(token)
@@ -189,7 +229,7 @@ def create_api(
         token: str, approval_id: str, request: Request, body: Approve | None = None
     ) -> dict[str, str]:
         business_id = await business(request, token)
-        approval = await store.get_approval(approval_id)
+        approval = await store.get_approval(_known(approval_id, "draft"))
         if approval is None or approval.business_id != business_id:
             raise Refused("I can't find that draft.")
         version = _edited(approval.planned_action, body or Approve())
@@ -215,6 +255,7 @@ def create_api(
     @api.post("/b/{token}/api/approvals/{approval_id}/reject")
     async def reject(token: str, approval_id: str, body: Reject, request: Request) -> dict:
         business_id = await business(request, token)
+        _known(approval_id, "draft")
         await flows.decide_from_dashboard(business_id, approval_id, "reject", reason=body.reason)
         if body.reason and body.reason.strip():
             return {"message": "Rejected. The team will revise it and learn from your reason."}
@@ -223,6 +264,7 @@ def create_api(
     @api.post("/b/{token}/api/approvals/{approval_id}/new-image")
     async def new_image(token: str, approval_id: str, body: Reject, request: Request) -> dict:
         business_id = await business(request, token)
+        _known(approval_id, "draft")
         await flows.decide_from_dashboard(
             business_id, approval_id, "new_image", reason=body.reason
         )
@@ -230,19 +272,21 @@ def create_api(
 
     @api.post("/b/{token}/api/actions/{action_id}/undo")
     async def undo(token: str, action_id: str, request: Request) -> dict[str, str]:
-        await flows.undo_from_dashboard(await business(request, token), action_id)
+        business_id = await business(request, token)
+        await flows.undo_from_dashboard(business_id, _known(action_id, "action"))
         return {"message": "Undoing. The post will be deleted from Bluesky."}
 
     @api.post("/b/{token}/api/trust/lower")
     async def lower(token: str, body: Lower, request: Request) -> dict[str, str]:
         business_id = await business(request, token)
-        await flows.lower_trust(business_id, body.team_id, body.task_type)
+        await flows.lower_trust(business_id, _known(body.team_id, "team"), body.task_type)
         return {"message": "Lowered. The team will ask more often from now on."}
 
     @api.post("/b/{token}/api/trust/threshold")
     async def threshold(token: str, body: Threshold, request: Request) -> dict[str, str]:
         business_id = await business(request, token)
-        await flows.set_threshold(business_id, body.team_id, body.promote_after)
+        team_id = _known(body.team_id, "team")
+        await flows.set_threshold(business_id, team_id, body.promote_after)
         n = body.promote_after
         approvals = "approval" if n == 1 else "approvals"
         return {"message": f"The team asks for more autonomy after {n} {approvals}."}
@@ -250,7 +294,7 @@ def create_api(
     @api.get("/b/{token}/api/files/{file_id}")
     async def file(token: str, file_id: str, request: Request, thumb: bool = False) -> Response:
         business_id = await business(request, token)
-        ref = await store.get_file(business_id, file_id)
+        ref = await store.get_file(business_id, _known(file_id, "file"))
         data = await store.file_bytes(business_id, file_id) if ref else None
         if ref is None or data is None:
             raise HTTPException(404, "That file isn't here anymore.")
@@ -261,8 +305,7 @@ def create_api(
                 media_type = "image/jpeg"
             except Exception:
                 pass
-        headers = {"Cache-Control": "private, max-age=3600"}
-        return Response(data, media_type=media_type, headers=headers)
+        return Response(data, media_type=media_type, headers=_file_headers(media_type))
 
     @api.get("/avatars/{path:path}")
     async def avatar(path: str) -> FileResponse:
@@ -274,22 +317,26 @@ def create_api(
 
     @api.post("/b/{token}/api/schedules/{schedule_id}/run")
     async def run_schedule(token: str, schedule_id: str, request: Request) -> dict[str, str]:
-        await flows.run_schedule_now(await business(request, token), schedule_id)
+        business_id = await business(request, token)
+        await flows.run_schedule_now(business_id, _known(schedule_id, "schedule"))
         return {"message": "Running now. Drafts show up here and in Telegram."}
 
     @api.post("/b/{token}/api/schedules/{schedule_id}/stop")
     async def stop_schedule(token: str, schedule_id: str, request: Request) -> dict[str, str]:
-        await flows.set_schedule_active(await business(request, token), schedule_id, False)
+        business_id = await business(request, token)
+        await flows.set_schedule_active(business_id, _known(schedule_id, "schedule"), False)
         return {"message": "Stopped. Turn it back on anytime."}
 
     @api.post("/b/{token}/api/schedules/{schedule_id}/start")
     async def start_schedule(token: str, schedule_id: str, request: Request) -> dict[str, str]:
-        await flows.set_schedule_active(await business(request, token), schedule_id, True)
+        business_id = await business(request, token)
+        await flows.set_schedule_active(business_id, _known(schedule_id, "schedule"), True)
         return {"message": "Turned back on."}
 
     @api.post("/b/{token}/api/lessons/{lesson_id}/forget")
     async def forget(token: str, lesson_id: str, request: Request) -> dict[str, str]:
-        await flows.forget_lesson(await business(request, token), lesson_id)
+        business_id = await business(request, token)
+        await flows.forget_lesson(business_id, _known(lesson_id, "lesson"))
         return {"message": "Forgotten. The team won't use this anymore."}
 
     return api

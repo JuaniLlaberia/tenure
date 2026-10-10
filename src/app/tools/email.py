@@ -11,10 +11,16 @@ BARE_URL = re.compile(r'(?<!href=")(?<!">)(https?://[^\s<]+)')
 BOLD = re.compile(r"\*\*(.+?)\*\*")
 BULLET = re.compile(r"^\s*[-*]\s+")
 
+def _href(url: str) -> str:
+    """
+    A URL from an already escaped line, made safe inside a double-quoted attribute.
+    """
+    return url.replace('"', "&quot;")
+
 def _inline(line: str) -> str:
     html = escape(line, quote=False)
-    html = MD_LINK.sub(lambda m: f'<a href="{escape(m.group(2))}">{m.group(1)}</a>', html)
-    html = BARE_URL.sub(lambda m: f'<a href="{m.group(1)}">{m.group(1)}</a>', html)
+    html = MD_LINK.sub(lambda m: f'<a href="{_href(m.group(2))}">{m.group(1)}</a>', html)
+    html = BARE_URL.sub(lambda m: f'<a href="{_href(m.group(1))}">{_href(m.group(1))}</a>', html)
     return BOLD.sub(r"<strong>\1</strong>", html)
 
 @dataclass(frozen=True)
@@ -92,7 +98,24 @@ class Resend:
         response = await self._http.post(
             RESEND_URL, headers={"Authorization": f"Bearer {self._api_key}"}, json=payload
         )
-        payload = response.json() if response.content else {}
+        answer = _json(response)
         if response.status_code >= 400:
-            raise ResendError(payload.get("message") or f"Resend answered {response.status_code}")
-        return payload["id"]
+            message = answer.get("message") or _short(response.text)
+            raise ResendError(f"Resend answered {response.status_code}: {message}".rstrip(": "))
+        if not answer.get("id"):
+            raise ResendError(f"Resend answered {response.status_code} without an email id")
+        return answer["id"]
+
+def _json(response: httpx.Response) -> dict:
+    try:
+        answer = response.json() if response.content else {}
+    except ValueError:
+        return {}
+    return answer if isinstance(answer, dict) else {}
+
+def _short(text: str, limit: int = 120) -> str:
+    """
+    The start of an error page as one line, without its HTML tags.
+    """
+    plain = " ".join(re.sub(r"<[^>]+>", " ", text).split())
+    return plain if len(plain) <= limit else plain[: limit - 1] + "…"

@@ -6,8 +6,10 @@ One Bluesky account and one email sender for every business, for now. Files (fou
 and the brain's images) are read and stored through Files.
 """
 
+import asyncio
 import logging
 import os
+from datetime import timedelta
 from uuid import uuid4
 
 from app.files import Files
@@ -23,6 +25,7 @@ logger = logging.getLogger(__name__)
 NO_BLUESKY = "Bluesky isn't connected. Set BLUESKY_HANDLE and BLUESKY_APP_PASSWORD."
 NO_EMAIL = "Email isn't connected. Set RESEND_API_KEY and RESEND_FROM."
 NO_FILES = "Files aren't available."
+POSTED_WITHIN = timedelta(hours=24)
 EXTENSIONS = {"image/jpeg": "jpg", "image/png": "png", "image/webp": "webp", "image/gif": "gif"}
 
 class MissingImage(Exception):
@@ -30,6 +33,12 @@ class MissingImage(Exception):
 
 def _new_id() -> str:
     return str(uuid4())
+
+def _with_extension(name: str | None, extension: str) -> str | None:
+    if not name:
+        return None
+    stem = name.rsplit(".", 1)[0] if "." in name else name
+    return f"{stem}.{extension}"
 
 def _reason(error: Exception) -> str:
     return " ".join(str(error).split())[:200] or type(error).__name__
@@ -85,12 +94,28 @@ class RealTools:
         action_id = _new_id()
         if self._bluesky is None:
             return ActionResult(action_id=action_id, ok=False, error=NO_BLUESKY)
+        posted = await self._posted_already(text)
+        if posted is not None:
+            error = f"This exact text was already posted to Bluesky in the last 24 hours: {posted}"
+            return ActionResult(action_id=action_id, ok=False, error=error)
         try:
             uri, url = await self._bluesky.post(text, await self._post_images(business_id, images))
         except Exception as error:
             logger.exception("Posting to Bluesky failed")
             return ActionResult(action_id=action_id, ok=False, error=_reason(error))
         return ActionResult(action_id=action_id, ok=True, url=url, external_id=uri)
+
+    async def _posted_already(self, text: str) -> str | None:
+        """
+        The public URL of a post with the same text from the last 24 hours. If Bluesky can't be
+        asked, the post goes ahead.
+        """
+        try:
+            found = await self._bluesky.find(text, POSTED_WITHIN)
+        except Exception as error:
+            logger.warning("Couldn't check recent Bluesky posts: %s", _reason(error))
+            return None
+        return found[1] if found else None
 
     async def delete_social(self, business_id: str, external_id: str) -> ActionResult:
         action_id = _new_id()
@@ -160,8 +185,9 @@ class RealTools:
     async def _post_images(self, business_id: str, refs: list[FileRef] | None) -> list[Image]:
         found = []
         for ref in refs or []:
-            data, _ = images.fit(await self._image_bytes(business_id, ref), ref.mime_type)
-            width, height = images.size_of(data)
+            data = await self._image_bytes(business_id, ref)
+            data, _ = await asyncio.to_thread(images.fit, data, ref.mime_type)
+            width, height = await asyncio.to_thread(images.size_of, data)
             found.append(Image(data, ref.alt_text or "", width, height))
         return found
 
@@ -169,7 +195,9 @@ class RealTools:
         found = []
         for n, ref in enumerate(refs or [], start=1):
             data = await self._image_bytes(business_id, ref)
-            filename = ref.name or f"image-{n}.{EXTENSIONS.get(ref.mime_type, 'png')}"
+            data, mime_type = await asyncio.to_thread(images.for_email, data, ref.mime_type)
+            extension = EXTENSIONS.get(mime_type, "png")
+            filename = _with_extension(ref.name, extension) or f"image-{n}.{extension}"
             found.append(Inline(f"img{n}", filename, data, ref.alt_text or ""))
         return found
 
