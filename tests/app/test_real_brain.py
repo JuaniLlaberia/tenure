@@ -79,13 +79,22 @@ async def test_onboard_hire_draft_and_post(brain: TenureBrain, store, tools: Fak
     assert chat.find("Posted to Bluesky")
     assert [call for call, _ in tools.calls] == ["fetch_page", "post_social"]
 
-async def test_without_an_openrouter_key_the_fake_brain_runs(monkeypatch):
+async def test_without_an_openrouter_key_the_app_refuses_to_start(monkeypatch):
     monkeypatch.delenv("OPENROUTER_API_KEY", raising=False)
+    monkeypatch.delenv("FAKE_BRAIN", raising=False)
+    with pytest.raises(SystemExit, match="OPENROUTER_API_KEY"):
+        async with open_brain(InMemoryStore(), FakeTools()):
+            pass
+
+async def test_the_fake_brain_runs_only_when_asked(monkeypatch):
+    monkeypatch.setenv("OPENROUTER_API_KEY", "test-key")
+    monkeypatch.setenv("FAKE_BRAIN", "1")
     async with open_brain(InMemoryStore(), FakeTools()) as brain:
         assert isinstance(brain, FakeBrain)
 
 async def test_with_a_key_the_real_brain_runs(monkeypatch):
     monkeypatch.setenv("OPENROUTER_API_KEY", "test-key")
+    monkeypatch.delenv("FAKE_BRAIN", raising=False)
     monkeypatch.delenv("DATABASE_URL", raising=False)
     async with open_brain(InMemoryStore(), FakeTools()) as brain:
         assert isinstance(brain, TenureBrain)

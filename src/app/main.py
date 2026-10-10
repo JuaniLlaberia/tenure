@@ -56,13 +56,19 @@ def make_store() -> AppStore:
 async def open_brain(store: AppStore, tools: Tools) -> AsyncIterator[Brain]:
     """
     Juan's brain when OPENROUTER_API_KEY is set, with its LangGraph checkpointer on
-    DATABASE_URL (in memory without it). Otherwise the fake brain, so the app still runs.
+    DATABASE_URL (in memory without it). The fake brain only when FAKE_BRAIN=1, so a missing
+    or mistyped key stops the app instead of quietly answering with scripted drafts.
     """
     settings = Settings.from_env(os.environ)
-    if settings.openrouter_api_key is None:
-        logger.warning("OPENROUTER_API_KEY not set: using the fake brain")
+    if os.environ.get("FAKE_BRAIN", "").strip() == "1":
+        logger.warning("FAKE_BRAIN=1: using the fake brain, no models are called")
         yield FakeBrain(store, tools=tools, delay=0.8)
         return
+    if settings.openrouter_api_key is None:
+        raise SystemExit(
+            "OPENROUTER_API_KEY is not set, so the brain can't run. Add it to .env, or set "
+            "FAKE_BRAIN=1 to try the app with scripted drafts."
+        )
     if settings.database_url is None:
         logger.warning("DATABASE_URL not set: brain conversations are lost on restart")
     async with open_checkpointer(settings) as checkpointer:
