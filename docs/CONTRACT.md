@@ -1,4 +1,4 @@
-# Brain ↔ App Contract (v0.7)
+# Brain ↔ App Contract (v0.8 draft)
 
 This is the agreement between the agent brain (`src/brain/`, owner: Juan) and the app (`src/app/`, owner: Mark).
 If both sides respect it, each can be built and tested alone, and they plug together at merge points.
@@ -9,6 +9,13 @@ If both sides respect it, each can be built and tested alone, and they plug toge
 Both change together: a change to one without the other is a bug, and `tests/contract/` should catch the shape side.
 
 ## 0. Changelog
+
+**v0.8 (Oct 10), proposed by Mark, needs Juan's OK**
+
+| # | Change | Why |
+| --- | --- | --- |
+| 1 | `NeedsApproval` and `Approval` gain `send_at`: a one-off time the founder asked for, or `None` (§6, §11) | "Post this Friday at 6 PM" waits for Friday instead of going out on approval |
+| 2 | `BusinessProfile.extra["timezone"]` is a known key: the IANA timezone the founder gave at setup (§11) | Schedules and send times use the founder's clock; without it, Los Angeles |
 
 **v0.7 (Oct 9), proposed by Mark, agreed by Juan.**
 
@@ -208,8 +215,11 @@ The app maps Telegram topics to `team_id` (a topic's `message_thread_id` ↔ `te
 | `planned_action` | `PlannedAction \| None` | What runs on approve; `None` for `draft_only` or task types without an action |
 | `media` | `list[FileRef]` | The draft's files when `planned_action` is `None` (a design draft, a post at `draft_only`). Empty when there is an action: its images live in `planned_action.images`. Default `[]` |
 | `check_confidence` | `float` | 0–1, from the independent check; the app may show it |
+| `send_at` | `datetime \| None` | v0.8: when the founder asked for it to go out ("post this Friday at 6 PM"), in UTC. `None`: on approval. Default `None` |
 
 The app shows `planned_action.images` if there is an action, otherwise `media`. A draft with images is one approval: approving runs the action with its images.
+
+**Send times (v0.8).** The brain sets `send_at` when the request names a single future time for the action; repeating requests become schedules instead. A draft with `send_at` always waits for approval, whatever the autonomy level. The app owns the timing: it shows the time, lets the founder change or clear it (or set one on any draft with an action), and when the founder approves, it holds the `approve` decision and sends it at that time. Until then the approval stays `pending`; if the action then fails, the draft is back with the founder like any failed action.
 
 **`ActionDone`** (`type="action_done"`): a real action happened.
 
@@ -525,7 +535,7 @@ LangGraph checkpoints are the brain's own business. They live in their own table
 | `tone` | `str \| None` | Voice, e.g. "friendly, no jargon" |
 | `main_clients` | `list[str]` | Client names (finance will need a richer `Client` model, v0.3) |
 | `links` | `list[str]` | Website, socials |
-| `extra` | `dict[str, str]` | Business-level odds and ends. Team-specific answers go to lessons, not here |
+| `extra` | `dict[str, str]` | Business-level odds and ends. Team-specific answers go to lessons, not here. Known key (v0.8): `timezone`, an IANA name asked at setup; missing means `"America/Los_Angeles"` |
 
 **`TaskStatus`** (`models/tasks.py`): `planned` → `in_progress` → `waiting_approval` → `done`, or `rejected` (founder rejected without a reason) or `failed` (something broke).
 
@@ -560,6 +570,7 @@ LangGraph checkpoints are the brain's own business. They live in their own table
 | `status` | `"pending" \| "approved" \| "edited" \| "rejected"` | Starts `pending` |
 | `edited_text` | `str \| None` | The founder's version, for `edited` |
 | `reason` | `str \| None` | The founder's reason, for `rejected` |
+| `send_at` | `datetime \| None` | Same as `NeedsApproval.send_at` (v0.8) |
 | `created_at` | `datetime` | When it was shown |
 | `resolved_at` | `datetime \| None` | When the founder decided |
 
