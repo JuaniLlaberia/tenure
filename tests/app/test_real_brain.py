@@ -66,6 +66,7 @@ async def test_onboard_hire_draft_and_post(brain: TenureBrain, store, tools: Fak
     await flows.on_start(CHAT, None, is_forum=True)
     await flows.drain()
     await say(flows, "Here's our site: https://bright.example")
+    await tap(flows, chat.find("which city's time"), "Skip (Los Angeles time)")
     await tap(flows, chat.find("Setup done"), "Marketing")
     thread_id = chat.topics["Marketing"]
     await tap(flows, chat.find("Which channels"), "Bluesky and newsletter")
