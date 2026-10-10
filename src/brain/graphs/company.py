@@ -38,6 +38,29 @@ REQUIRED = ("name", "what_you_sell", "customers")
 MAX_TURNS = 8
 MAX_PAGES = 2
 URL = re.compile(r"https?://[^\s<>\"')\]]+")
+BARE_DOMAIN = re.compile(
+    r"(?<![\w@./:-])((?:[a-z0-9-]+\.)+([a-z]{2,24}))(/[^\s<>\"')\]]*)?(?![\w@-])", re.IGNORECASE
+)
+TLDS = {
+    "com", "net", "org", "io", "co", "ai", "app", "dev", "shop", "store", "biz", "info", "site",
+    "online", "studio", "design", "agency", "tech", "page", "blog", "xyz",
+}
+NOT_TLDS = {"js", "ts", "py", "rb", "md", "sh", "db", "ps", "cs", "gz"}
+
+def find_links(text: str) -> list[str]:
+    """
+    The links in an answer, in order: full URLs, then bare domains like "mysite.com" or
+    "www.mysite.com/about" with https:// added. A bare domain needs a common or two-letter
+    country ending, so emails and file names like "menu.pdf" aren't links.
+    """
+    links = [url.rstrip(".,;:!?") for url in URL.findall(text)]
+    rest = URL.sub(" ", text)
+    for match in BARE_DOMAIN.finditer(rest):
+        tld = match.group(2).lower()
+        if tld in NOT_TLDS or (tld not in TLDS and len(tld) != 2):
+            continue
+        links.append("https://" + match.group(0).rstrip(".,;:!?"))
+    return list(dict.fromkeys(links))
 
 FIRST_QUESTION = (
     f"Hi, I'm {CHIEF_OF_STAFF.name}, your chief of staff. I'll learn about your business once, "
@@ -150,7 +173,7 @@ def build_company_graph(deps: Deps, checkpointer) -> CompiledStateGraph:
 
     async def extract(state: CompanyState) -> dict:
         answer = state["answer"]
-        links = list(dict.fromkeys(URL.findall(answer)))
+        links = find_links(answer)
         pages = []
         for url in links[:MAX_PAGES]:
             page = await deps.tools.fetch_page(url)

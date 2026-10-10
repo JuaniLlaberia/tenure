@@ -1,6 +1,6 @@
 import pytest
 
-from brain.graphs.company import CHIEF_OF_STAFF, FIRST_QUESTION, MAX_TURNS
+from brain.graphs.company import CHIEF_OF_STAFF, FIRST_QUESTION, MAX_TURNS, find_links
 from brain.prompts.chief_of_staff import Extraction
 from contract import (
     Ask,
@@ -152,6 +152,35 @@ async def test_website_link_is_kept_in_the_profile(brain, collect, deps, llm, cl
     )
 
     assert "https://juans.studio" in (await deps.store.get_profile(BUSINESS_ID)).links
+
+async def test_a_bare_domain_is_read_like_a_link(brain, collect, deps, llm, tools, clear_answers):
+    tools.pages = {
+        "https://juans.studio": PageContent(
+            url="https://juans.studio",
+            title="Juan's Studio",
+            text="Brand design for cafés since 2019",
+        )
+    }
+
+    await onboard(brain, collect, llm, [("Our site is juans.studio.", {"name": "Juan's Studio"})])
+
+    assert ("fetch_page", {"url": "https://juans.studio"}) in tools.calls
+    assert "Brand design for cafés since 2019" in extract_prompts(llm)[0]
+
+@pytest.mark.parametrize(
+    ("text", "links"),
+    [
+        ("Check mysite.com.", ["https://mysite.com"]),
+        ("see www.shop.com.ar/about", ["https://www.shop.com.ar/about"]),
+        ("https://x.io/a, and mysite.com", ["https://x.io/a", "https://mysite.com"]),
+        ("write to juan@mysite.com", []),
+        ("our menu.pdf and photo.jpg", []),
+        ("e.g. a coffee shop, i.e. small", []),
+        ("built with Node.js", []),
+    ],
+)
+def test_find_links(text, links):
+    assert find_links(text) == links
 
 async def test_unreachable_website_does_not_break(brain, collect, llm, clear_answers):
     rounds = await onboard(
