@@ -66,7 +66,7 @@ from contract import (
 )
 
 RECURSION_LIMIT = 200
-WORK_QUESTIONS = {"channels", "clarify", "image", "schedule_day"}
+WORK_QUESTIONS = {"channels", "clarify", "image", "other_channel", "schedule_day"}
 TOPIC_CHARS = 48
 
 class TenureBrain:

@@ -75,6 +75,24 @@ IS_DRAFT_FEEDBACK = Question.yes_no(
     no="A new request or something else",
 )
 
+OTHER_CHANNEL = Question.yes_no(
+    "Does the founder want something made for or posted on a channel other than Bluesky or "
+    "email, like Instagram, LinkedIn, TikTok, X (Twitter), Facebook or YouTube?",
+    yes="Yes: they name another channel for this work",
+    no="No: Bluesky, email, or no channel named",
+)
+
+WANTS_BLUESKY = Question.yes_no(
+    "The team offered to make a Bluesky post instead. Does the founder accept?",
+    yes="Yes, a Bluesky post",
+    no="No, or it isn't clear",
+)
+
+OTHER_CHANNEL_ASK = (
+    "I can only post to Bluesky and send emails for now. Want this as a Bluesky post instead?"
+)
+OTHER_CHANNEL_REPLIES = ["Yes, a Bluesky post", "No"]
+
 DROPPED = "Okay, I've dropped that request."
 SET_ASIDE = "I'll set aside my question about {topic} and start on this."
 

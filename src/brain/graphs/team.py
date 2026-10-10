@@ -22,6 +22,7 @@ from brain.helpers.decide import decide
 from brain.helpers.images import ImageError
 from brain.prompts.lead import (
     ABOUT_IMAGE,
+    DROPPED,
     HAS_FEEDBACK,
     IMAGE_QUESTION,
     IMAGE_REPLIES,
@@ -30,7 +31,11 @@ from brain.prompts.lead import (
     NAMES_CHANNELS,
     NO_IMAGE_MADE,
     ONE_OFF,
+    OTHER_CHANNEL,
+    OTHER_CHANNEL_ASK,
+    OTHER_CHANNEL_REPLIES,
     STOPS_SCHEDULE,
+    WANTS_BLUESKY,
     WANTS_IMAGE,
     WANTS_SCHEDULE,
     WEEKDAYS,
@@ -120,6 +125,7 @@ class TeamState(TypedDict, total=False):
     ask_channels: bool
     ask_image: bool
     drop: bool
+    other_channel: bool
     history: list[str]
     routed: list[str]
     plan_question: str | None
@@ -165,6 +171,7 @@ def new_request(
         "ask_channels": False,
         "ask_image": False,
         "drop": False,
+        "other_channel": False,
         "routed": [],
         "plan_question": None,
         "clarified": 0,
@@ -367,6 +374,8 @@ def build_team_graph(
             questions["has_feedback"] = HAS_FEEDBACK
             questions["one_off"] = ONE_OFF
             questions["wants_schedule"] = WANTS_SCHEDULE
+            if post_task_type(template):
+                questions["other_channel"] = OTHER_CHANNEL
             active = await active_schedules(state)
             if active:
                 questions["changes_schedule"] = changes_question(active)
@@ -381,6 +390,8 @@ def build_team_graph(
             return {"schedule_mode": "change", "reasoning": reasoning, "tokens_used": tokens}
         if not scheduled and decisions["wants_schedule"].accepts("yes", threshold):
             return {"schedule_mode": "new", "reasoning": reasoning, "tokens_used": tokens}
+        if "other_channel" in questions and decisions["other_channel"].accepts("yes", threshold):
+            return {"other_channel": True, "reasoning": reasoning, "tokens_used": tokens}
         routed = routed_from(template, decisions)
         goes_out = set(routed) & set(template.channel_task_types())
         ask_channels = bool(
@@ -410,6 +421,8 @@ def build_team_graph(
             return "schedule"
         if state.get("schedule_mode") == "change":
             return "change_schedule"
+        if state.get("other_channel"):
+            return "other_channel"
         if state.get("ask_channels"):
             return "channels"
         return "plan" if state["routed"] else "reply"
@@ -584,6 +597,33 @@ def build_team_graph(
         return {
             "request": f"{state['request']}\n\n{lead.name}: {spec.question}\nFounder: {answer}",
             "ask_channels": False,
+        }
+
+    async def other_channel(state: TeamState) -> dict:
+        """
+        Work for a channel the team can't post to: offer a Bluesky post instead. Anything but
+        a clear yes drops the request.
+        """
+        template = template_of(state)
+        lead = template.lead.persona
+        ask = Ask(
+            team_id=state["team_id"],
+            persona=lead,
+            question=OTHER_CHANNEL_ASK,
+            quick_replies=OTHER_CHANNEL_REPLIES,
+        )
+        answer = str(interrupt(ask.model_dump(mode="json")))
+        exchange = f"{lead.name}: {OTHER_CHANNEL_ASK}\nFounder: {answer}"
+        decisions = await decide(deps, {"wants_bluesky": WANTS_BLUESKY}, exchange)
+        tokens = state.get("tokens_used", 0) + decisions.tokens
+        if not decisions["wants_bluesky"].accepts("yes", threshold):
+            emit(Say(team_id=state["team_id"], persona=lead, text=DROPPED))
+            return {"other_channel": False, "routed": [], "tokens_used": tokens}
+        return {
+            "other_channel": False,
+            "routed": [post_task_type(template)],
+            "request": f"{state['request']}\n\n{exchange}",
+            "tokens_used": tokens,
         }
 
     async def reply(state: TeamState) -> dict:
@@ -1268,6 +1308,7 @@ def build_team_graph(
         ("schedule_day", schedule_day),
         ("schedule_save", schedule_save),
         ("image", image),
+        ("other_channel", other_channel),
         ("dispatch", dispatch),
         ("specialist", specialist),
         ("check", check),
@@ -1284,13 +1325,18 @@ def build_team_graph(
     graph.add_conditional_edges("onboard", after_onboard, ["onboard", "onboard_done"])
     graph.add_edge("onboard_done", END)
     graph.add_conditional_edges(
-        "triage", after_triage, ["schedule", "change_schedule", "channels", "plan", "reply"]
+        "triage",
+        after_triage,
+        ["schedule", "change_schedule", "other_channel", "channels", "plan", "reply"],
     )
     for node in ("schedule", "change_schedule"):
         graph.add_conditional_edges(node, after_schedule, ["schedule_day", "schedule_save", END])
     graph.add_edge("schedule_day", "schedule_save")
     graph.add_edge("schedule_save", END)
     graph.add_edge("channels", "route")
+    graph.add_conditional_edges(
+        "other_channel", lambda s: "plan" if s["routed"] else END, ["plan", END]
+    )
     graph.add_edge("reply", END)
     graph.add_conditional_edges(
         "route", lambda s: "plan" if s["routed"] else "reply", ["plan", "reply"]
@@ -1384,6 +1430,15 @@ def last_own_step(steps: list[str]) -> int:
     """
     own = [index for index, step in enumerate(steps) if ":" not in step]
     return own[-1] if own else len(steps) - 1
+
+def post_task_type(template: Template) -> str | None:
+    """
+    The task type that posts to Bluesky, if the team has one.
+    """
+    return next(
+        (name for name, spec in template.task_types.items() if spec.action == "post_social"),
+        None,
+    )
 
 def cross_step(steps: list[str]) -> int | None:
     """

@@ -170,3 +170,36 @@ async def test_work_for_a_hired_team_points_to_its_topic(
     prompt = reply_prompt(llm)
     assert "is Design's work. Ask Iris in the Design topic." in prompt
     assert "/hire design" not in prompt
+
+async def asked_for_instagram(brain, collect, jev, script, team, message):
+    script()
+    jev.answers["other_channel"] = lambda state: 0.9 if "Instagram" in state else 0.1
+    events = await collect(brain.handle_message(message(team, "Make an Instagram post")))
+    return events
+
+async def test_another_channel_offers_a_bluesky_post(brain, collect, jev, script, team, message):
+    events = await asked_for_instagram(brain, collect, jev, script, team, message)
+
+    (ask,) = of(events, Ask)
+    assert ask.question == (
+        "I can only post to Bluesky and send emails for now. Want this as a Bluesky post instead?"
+    )
+    assert ask.quick_replies == ["Yes, a Bluesky post", "No"]
+    assert not of(events, NeedsApproval)
+
+async def test_yes_makes_a_bluesky_post(brain, collect, jev, script, team, message):
+    await asked_for_instagram(brain, collect, jev, script, team, message)
+    jev.answers["wants_bluesky"] = lambda state: 0.9 if "Yes, a Bluesky post" in state else 0.1
+
+    events = await collect(brain.handle_message(message(team, "Yes, a Bluesky post", "m2")))
+
+    assert [d.task_type for d in of(events, NeedsApproval)] == ["social_post"]
+
+async def test_no_drops_the_other_channel_request(brain, collect, jev, script, team, message):
+    await asked_for_instagram(brain, collect, jev, script, team, message)
+    jev.answers["wants_bluesky"] = 0.1
+
+    events = await collect(brain.handle_message(message(team, "No", "m2")))
+
+    assert [say.text for say in of(events, Say)] == ["Okay, I've dropped that request."]
+    assert not of(events, NeedsApproval)
