@@ -76,6 +76,32 @@ def test_unsupported_types_become_jpeg():
     data, mime = images.fit(out.getvalue(), "image/bmp")
     assert mime == "image/jpeg" and images.size_of(data) == (20, 20)
 
+def transparent_png(side: int = 40) -> bytes:
+    out = BytesIO()
+    PILImage.new("RGBA", (side, side), (0, 0, 0, 0)).save(out, "PNG")
+    return out.getvalue()
+
+def pixel(data: bytes) -> tuple:
+    with PILImage.open(BytesIO(data)) as image:
+        return image.convert("RGB").getpixel((5, 5))
+
+def test_transparent_parts_turn_white_not_black():
+    assert min(pixel(images.thumbnail(transparent_png()))) > 240
+    out, mime = images.fit(transparent_png(), "image/x-other")
+    assert mime == "image/jpeg" and min(pixel(out)) > 240
+
+def test_an_animated_gif_becomes_its_first_frame():
+    frames = [PILImage.new("P", (30, 30), color) for color in (1, 2, 3)]
+    out = BytesIO()
+    frames[0].save(out, "GIF", save_all=True, append_images=frames[1:], transparency=0)
+    data, mime = images.fit(out.getvalue(), "image/gif")
+    assert mime == "image/jpeg" and images.size_of(data) == (30, 30)
+
+def test_email_images_are_shrunk_under_a_megabyte():
+    data, mime = images.for_email(noise(1600), "image/png")
+    assert mime == "image/jpeg" and len(data) <= images.EMAIL_LIMIT
+    assert max(images.size_of(data)) <= images.EMAIL_SIDE
+
 def test_thumbnail_fits_the_side():
     thumb = images.thumbnail(png(1200, 600), side=300)
     assert images.size_of(thumb) == (300, 150)
@@ -136,6 +162,24 @@ async def test_email_images_go_inline_header_first(files):
     html = body["html"]
     assert html.index("cid:img1") < html.index("Doors open.") < html.index("cid:img2")
     assert 'alt="Studio"' in html
+
+async def test_big_email_images_are_sent_shrunk(files):
+    seen = {}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen["body"] = json.loads(request.content)
+        return httpx.Response(200, json={"id": "em_1"})
+
+    http = httpx.AsyncClient(transport=httpx.MockTransport(handler))
+    tools = RealTools(email=Resend("re_x", "Bright <hi@b.co>", http=http), files=files)
+    big = await tools.save_file("b1", noise(1600), "image/png", name="studio.png")
+
+    result = await tools.send_email("b1", "list@b.co", "Friday", "Doors open.", [big])
+
+    assert result.ok
+    (attachment,) = seen["body"]["attachments"]
+    assert attachment["filename"] == "studio.jpg"
+    assert len(base64.b64decode(attachment["content"])) <= images.EMAIL_LIMIT
 
 async def test_schedules_due_listed_and_removed_with_the_team(store):
     weekly = Schedule(

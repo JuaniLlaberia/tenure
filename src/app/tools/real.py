@@ -6,6 +6,7 @@ One Bluesky account and one email sender for every business, for now. Files (fou
 and the brain's images) are read and stored through Files.
 """
 
+import asyncio
 import logging
 import os
 from uuid import uuid4
@@ -30,6 +31,12 @@ class MissingImage(Exception):
 
 def _new_id() -> str:
     return str(uuid4())
+
+def _with_extension(name: str | None, extension: str) -> str | None:
+    if not name:
+        return None
+    stem = name.rsplit(".", 1)[0] if "." in name else name
+    return f"{stem}.{extension}"
 
 def _reason(error: Exception) -> str:
     return " ".join(str(error).split())[:200] or type(error).__name__
@@ -160,8 +167,9 @@ class RealTools:
     async def _post_images(self, business_id: str, refs: list[FileRef] | None) -> list[Image]:
         found = []
         for ref in refs or []:
-            data, _ = images.fit(await self._image_bytes(business_id, ref), ref.mime_type)
-            width, height = images.size_of(data)
+            data = await self._image_bytes(business_id, ref)
+            data, _ = await asyncio.to_thread(images.fit, data, ref.mime_type)
+            width, height = await asyncio.to_thread(images.size_of, data)
             found.append(Image(data, ref.alt_text or "", width, height))
         return found
 
@@ -169,7 +177,9 @@ class RealTools:
         found = []
         for n, ref in enumerate(refs or [], start=1):
             data = await self._image_bytes(business_id, ref)
-            filename = ref.name or f"image-{n}.{EXTENSIONS.get(ref.mime_type, 'png')}"
+            data, mime_type = await asyncio.to_thread(images.for_email, data, ref.mime_type)
+            extension = EXTENSIONS.get(mime_type, "png")
+            filename = _with_extension(ref.name, extension) or f"image-{n}.{extension}"
             found.append(Inline(f"img{n}", filename, data, ref.alt_text or ""))
         return found
 
