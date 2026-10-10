@@ -1,6 +1,7 @@
 import logging
 from collections.abc import AsyncIterator, Callable
 from dataclasses import dataclass
+from datetime import UTC, datetime
 from typing import Literal, TypedDict
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
@@ -29,6 +30,7 @@ from brain.prompts.lead import (
     IS_CLEAR,
     MENTIONS_IMAGE,
     NAMES_CHANNELS,
+    NAMES_SEND_TIME,
     NO_IMAGE_MADE,
     ONE_OFF,
     OTHER_CHANNEL,
@@ -41,6 +43,7 @@ from brain.prompts.lead import (
     WEEKDAYS,
     LeadPlan,
     ScheduleDraft,
+    SendTime,
     TaskPlan,
     cadence_words,
     changes_question,
@@ -49,6 +52,7 @@ from brain.prompts.lead import (
     reply_messages,
     report_text,
     schedule_messages,
+    send_time_messages,
     triage_state,
     which_question,
 )
@@ -99,6 +103,7 @@ class TaskState(BaseModel):
     checks: int = 0
     missed: str | None = None
     approval_id: str | None = None
+    send_at: datetime | None = None
 
 class TeamState(TypedDict, total=False):
     business_id: str
@@ -126,6 +131,7 @@ class TeamState(TypedDict, total=False):
     ask_image: bool
     drop: bool
     other_channel: bool
+    send_at: str | None
     history: list[str]
     routed: list[str]
     plan_question: str | None
@@ -172,6 +178,7 @@ def new_request(
         "ask_image": False,
         "drop": False,
         "other_channel": False,
+        "send_at": None,
         "routed": [],
         "plan_question": None,
         "clarified": 0,
@@ -247,7 +254,13 @@ def build_team_graph(
         past = (state.get("past_tasks") or {}).get(task.task_id)
         redraw = rerun is not None
         if past is None:
-            return TaskState(task=task, feedback=feedback, reasoning=reasoning, redraw=redraw)
+            return TaskState(
+                task=task,
+                feedback=feedback,
+                reasoning=reasoning,
+                redraw=redraw,
+                send_at=approval.send_at,
+            )
         return TaskState.model_validate(past).model_copy(
             update={
                 "task": task,
@@ -257,6 +270,7 @@ def build_team_graph(
                 "reasoning": reasoning,
                 "redraw": redraw,
                 "checks": 0,
+                "send_at": approval.send_at,
             }
         )
 
@@ -376,6 +390,8 @@ def build_team_graph(
             questions["wants_schedule"] = WANTS_SCHEDULE
             if post_task_type(template):
                 questions["other_channel"] = OTHER_CHANNEL
+            if template.channel_task_types():
+                questions["names_send_time"] = NAMES_SEND_TIME
             active = await active_schedules(state)
             if active:
                 questions["changes_schedule"] = changes_question(active)
@@ -400,6 +416,11 @@ def build_team_graph(
             and not decisions["names_channels"].accepts("yes", threshold)
         )
         assumptions = list(state.get("assumptions") or [])
+        send_at = None
+        if goes_out and "names_send_time" in questions:
+            if decisions["names_send_time"].accepts("yes", threshold):
+                send_at, extracted = await extract_send_time(state)
+                tokens += extracted
         if scheduled and ask_channels:
             ask_channels = False
             made = ", ".join(task_type.replace("_", " ") for task_type in routed)
@@ -410,6 +431,7 @@ def build_team_graph(
         return {
             "routed": routed,
             "ask_channels": ask_channels,
+            "send_at": send_at.isoformat() if send_at else None,
             "assumptions": assumptions,
             "reasoning": reasoning,
             "reply_reason": "chat",
@@ -426,6 +448,38 @@ def build_team_graph(
         if state.get("ask_channels"):
             return "channels"
         return "plan" if state["routed"] else "reply"
+
+    async def extract_send_time(state: TeamState) -> tuple[datetime | None, int]:
+        """
+        The one time the founder wants the draft to go out, read in the business's timezone
+        and kept in UTC. A time that has passed, or none, gives None.
+        """
+        profile = await deps.store.get_profile(state["business_id"])
+        zone = ZoneInfo(
+            valid_zone(profile.extra.get("timezone") if profile else None)
+            or Cadence.model_fields["timezone"].default
+        )
+        now = deps.clock()
+        today = now.astimezone(zone).strftime("%A %Y-%m-%d %H:%M")
+        try:
+            result = await deps.llm.structured(
+                deps.settings.model_lead,
+                send_time_messages(state["request"], today),
+                SendTime,
+                reasoning=False,
+            )
+        except Exception as error:
+            log.warning("Send time extraction failed: %s", error)
+            return None, 0
+        found = result.value
+        try:
+            day = datetime.strptime(found.date or "", "%Y-%m-%d")
+            at = datetime.strptime(found.time or "09:00", "%H:%M")
+        except ValueError:
+            return None, result.tokens
+        local = day.replace(hour=at.hour, minute=at.minute, tzinfo=zone)
+        when = local.astimezone(UTC)
+        return (when if when > now else None), result.tokens
 
     async def active_schedules(state: TeamState) -> list[Schedule]:
         """
@@ -738,7 +792,10 @@ def build_team_graph(
                 updated_at=now,
             )
             await deps.store.save_task(task)
-            ts = TaskState(task=task, reasoning=state.get("reasoning", False), media=media)
+            send_at = state.get("send_at") if template.task_types[item.task_type].action else None
+            ts = TaskState(
+                task=task, reasoning=state.get("reasoning", False), media=media, send_at=send_at
+            )
             tasks[task.task_id] = ts.model_dump(mode="json")
             order.append(task.task_id)
         offered = set(state.get("suggested_teams") or [])
@@ -1196,6 +1253,9 @@ def build_team_graph(
                 updated_at=deps.clock(),
             )
         mode = gate(trust.level)
+        send_at = ts.send_at if planned is not None else None
+        if send_at is not None:
+            mode = "approval"
         confidence = ts.check_confidence or 0.0
         if mode == "approval":
             if trust.level == AutonomyLevel.DRAFT_ONLY:
@@ -1211,6 +1271,7 @@ def build_team_graph(
                 planned_action=planned,
                 media=media,
                 check_confidence=confidence,
+                send_at=send_at if planned is not None else None,
                 created_at=deps.clock(),
             )
             await deps.store.save_approval(approval)
@@ -1227,6 +1288,7 @@ def build_team_graph(
                     planned_action=planned,
                     media=media,
                     check_confidence=confidence,
+                    send_at=approval.send_at,
                 )
             )
         elif planned is None:

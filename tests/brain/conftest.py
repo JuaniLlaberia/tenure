@@ -150,6 +150,7 @@ def script(jev, llm):
                 "new_request": 0.1,
                 "is_draft_feedback": 0.1,
                 "other_channel": 0.1,
+                "names_send_time": 0.1,
                 "is_clear": clear,
                 "passes_check": passes,
                 "names_channels": named,

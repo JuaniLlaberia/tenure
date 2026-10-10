@@ -184,6 +184,33 @@ def schedule_messages(
         {"role": "user", "content": f"The founder's message:\n{request}"},
     ]
 
+NAMES_SEND_TIME = Question.yes_no(
+    "Does the founder say one specific future time for this to go out or be sent (\"this Friday "
+    "at 6 PM\", \"tomorrow morning at 9\"), once, not repeating?",
+    yes="Yes: one time to send it",
+    no="No time, now, or a repeating time",
+)
+
+class SendTime(BaseModel):
+    """
+    When the founder wants the draft to go out, in their local time. Null when not said.
+    """
+
+    date: str | None = None
+    time: str | None = None
+
+def send_time_messages(request: str, today: str) -> list[Message]:
+    system = (
+        "Read when a solo founder wants their post or email to go out. Today is "
+        f"{today} (their local time). Reply as JSON: {{\"date\": \"YYYY-MM-DD\", \"time\": "
+        '"HH:MM"}, 24-hour local time. "Morning" is 09:00, "afternoon" 15:00, "evening" 18:00. '
+        "Use null for anything they didn't say."
+    )
+    return [
+        {"role": "system", "content": system},
+        {"role": "user", "content": f"The founder's message:\n{request}"},
+    ]
+
 ABOUT_IMAGE = Question.yes_no(
     "Is this feedback only about the image that goes with the draft (its look, colours, subject "
     "or style), and not about the text?",

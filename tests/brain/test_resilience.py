@@ -1,3 +1,5 @@
+from datetime import UTC, datetime
+
 import httpx
 import pytest
 
@@ -6,8 +8,17 @@ from brain.deps import Settings
 from brain.helpers.images import OpenRouterImages
 from brain.helpers.jev import OpenRouterJev
 from brain.helpers.llm import OpenRouterLLM
-from brain.prompts.lead import CANT_DELETE
-from contract import Ask, Error, NeedsApproval, Say
+from brain.prompts.lead import CANT_DELETE, SendTime
+from contract import (
+    ActionDone,
+    ApprovalDecision,
+    Ask,
+    AutonomyLevel,
+    BusinessProfile,
+    Error,
+    NeedsApproval,
+    Say,
+)
 
 SETTINGS = Settings(openrouter_api_key="sk-test-key")
 NO_CREDITS = {"error": {"code": 402, "message": "Insufficient credits. Add more using /credits"}}
@@ -203,3 +214,73 @@ async def test_no_drops_the_other_channel_request(brain, collect, jev, script, t
 
     assert [say.text for say in of(events, Say)] == ["Okay, I've dropped that request."]
     assert not of(events, NeedsApproval)
+
+FRIDAY_6PM = {"date": "2026-10-09", "time": "18:00"}
+
+async def timed(deps, jev, llm, script, found=FRIDAY_6PM):
+    script()
+    await deps.store.save_profile(
+        BusinessProfile(
+            business_id="b1",
+            name="Juan's Studio",
+            what_you_sell="Logos",
+            customers="Cafés",
+            extra={"timezone": "America/Argentina/Buenos_Aires"},
+        )
+    )
+    jev.answers["names_send_time"] = lambda state: 0.9 if "Friday at 6" in state else 0.1
+    llm.structured_responses["SendTime"] = found
+
+async def test_a_named_time_goes_on_the_draft(
+    brain, collect, deps, jev, llm, script, team, message
+):
+    await timed(deps, jev, llm, script)
+
+    events = await collect(brain.handle_message(message(team, "Post this Friday at 6 PM")))
+
+    (needs,) = of(events, NeedsApproval)
+    assert needs.send_at == datetime(2026, 10, 9, 21, 0, tzinfo=UTC)
+    assert (await deps.store.get_approval(needs.approval_id)).send_at == needs.send_at
+    (call,) = [c for c in llm.calls if c.schema is SendTime]
+    assert "Thursday 2026-10-08 09:00" in str(call.messages)
+
+async def test_without_a_time_there_is_no_send_time(brain, collect, script, team, message):
+    script()
+
+    events = await collect(brain.handle_message(message(team, "Post about our launch")))
+
+    assert of(events, NeedsApproval)[0].send_at is None
+
+async def test_a_time_in_the_past_is_ignored(
+    brain, collect, deps, jev, llm, script, team, message
+):
+    await timed(deps, jev, llm, script, found={"date": "2026-10-01", "time": "18:00"})
+
+    events = await collect(brain.handle_message(message(team, "Post this Friday at 6 PM")))
+
+    assert of(events, NeedsApproval)[0].send_at is None
+
+async def test_a_timed_draft_waits_for_approval_even_when_autonomous(
+    brain, collect, deps, jev, llm, script, make_team, message
+):
+    team = await make_team(levels={"social_post": AutonomyLevel.AUTONOMOUS})
+    await timed(deps, jev, llm, script)
+
+    events = await collect(brain.handle_message(message(team, "Post this Friday at 6 PM")))
+
+    assert of(events, NeedsApproval) and not of(events, ActionDone)
+
+async def test_a_revision_keeps_the_send_time(
+    brain, collect, deps, jev, llm, script, team, message
+):
+    await timed(deps, jev, llm, script)
+    events = await collect(brain.handle_message(message(team, "Post this Friday at 6 PM")))
+    (needs,) = of(events, NeedsApproval)
+    decision = ApprovalDecision(
+        business_id="b1", approval_id=needs.approval_id, decision="reject", reason="Shorter"
+    )
+
+    events = await collect(brain.resolve_approval(decision))
+
+    (again,) = of(events, NeedsApproval)
+    assert again.send_at == needs.send_at
