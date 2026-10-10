@@ -25,6 +25,7 @@ from brain.prompts.lead import (
     HAS_FEEDBACK,
     IS_CLEAR,
     NAMES_CHANNELS,
+    ONE_OFF,
     STOPS_SCHEDULE,
     WANTS_NO_IMAGE,
     WANTS_SCHEDULE,
@@ -352,6 +353,7 @@ def build_team_graph(
         active: list[Schedule] = []
         if not scheduled:
             questions["has_feedback"] = HAS_FEEDBACK
+            questions["one_off"] = ONE_OFF
             questions["wants_schedule"] = WANTS_SCHEDULE
             active = await active_schedules(state)
             if active:
@@ -359,9 +361,8 @@ def build_team_graph(
         decisions = await decide(deps, questions, triage_state(template, state["request"]))
         reasoning = wants_reasoning(deps, decisions)
         tokens = state.get("tokens_used", 0) + decisions.tokens
-        if not scheduled and learn is not None and decisions["has_feedback"].accepts(
-            "yes", threshold
-        ):
+        lasting = not scheduled and not decisions["one_off"].accepts("yes", threshold)
+        if lasting and learn is not None and decisions["has_feedback"].accepts("yes", threshold):
             async for event in learn({**state, "reasoning": reasoning}, state["request"]):
                 emit(event)
         if active and decisions["changes_schedule"].accepts("yes", threshold):

@@ -25,6 +25,14 @@ HAS_FEEDBACK = Question.yes_no(
     no="No feedback; it's only a request, a question or small talk",
 )
 
+ONE_OFF = Question.yes_no(
+    "Is any feedback in the founder's message only about this one piece of work (a date, a "
+    "topic, an offer or a detail for this request), rather than something the team should keep "
+    "doing from now on?",
+    yes="Only about this request; nothing to remember for later",
+    no="Something the team should remember, or there's no feedback",
+)
+
 NAMES_CHANNELS = Question.yes_no(
     "Does the founder's message say where it should go out: a channel or a format like a "
     "Bluesky or social post, a newsletter or an email?",

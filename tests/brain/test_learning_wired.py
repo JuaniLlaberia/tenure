@@ -51,6 +51,20 @@ async def test_chat_feedback_becomes_lesson(brain, collect, deps, llm, script, t
     assert (lesson.source, lesson.source_ref) == ("chat", "m7")
     assert deps.store.tasks == {}
 
+async def test_one_off_instructions_are_not_learned(
+    brain, collect, deps, jev, llm, script, team, message
+):
+    script(feedback=0.9)
+    jev.answers["one_off"] = 0.9
+
+    events = await collect(
+        brain.handle_message(message(team, "Post about Friday, mention the 20% launch discount"))
+    )
+
+    assert not of(events, LessonLearned)
+    assert not [call for call in llm.calls if call.schema is ReflectOutput]
+    assert of(events, NeedsApproval)
+
 async def test_feedback_and_work_in_one_message(brain, collect, llm, script, team, message):
     script(feedback=0.95)
     llm.structured_responses["ReflectOutput"] = NO_HASHTAGS

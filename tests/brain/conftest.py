@@ -145,6 +145,7 @@ def script(jev, llm):
         jev.answers.update(
             {
                 "has_feedback": feedback,
+                "one_off": 0.1,
                 "is_clear": clear,
                 "passes_check": passes,
                 "names_channels": named,
