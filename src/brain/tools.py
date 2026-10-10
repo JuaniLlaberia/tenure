@@ -2,7 +2,7 @@ from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
 
 from brain.common import new_id
-from brain.context import MAX_FETCH_CHARS, lessons_section, profile_section
+from brain.context import MAX_FETCH_CHARS, fence, lessons_section, profile_section
 from brain.deps import Deps
 from brain.helpers.llm import ToolDef
 from contract import FileKind, FileRef
@@ -63,9 +63,10 @@ async def _web_search(ctx: ToolContext, args: dict) -> str:
     results = await ctx.deps.tools.web_search(query, k=SEARCH_RESULTS)
     if not results:
         return f"No results for {query!r}."
-    return "\n".join(
+    listed = "\n".join(
         f"{n}. {r.title}\n   {r.url}\n   {r.snippet}" for n, r in enumerate(results, start=1)
     )
+    return fence(listed, "search results")
 
 async def _fetch_page(ctx: ToolContext, args: dict) -> str:
     url = str(args.get("url", "")).strip()
@@ -75,7 +76,7 @@ async def _fetch_page(ctx: ToolContext, args: dict) -> str:
     if page is None:
         return "Couldn't open that page."
     text = page.text if len(page.text) <= MAX_FETCH_CHARS else page.text[:MAX_FETCH_CHARS] + "…"
-    return f"{page.title or page.url}\n\n{text}"
+    return fence(f"{page.title or page.url}\n\n{text}", f"web page {page.url}")
 
 async def _generate_image(ctx: ToolContext, args: dict) -> str:
     """

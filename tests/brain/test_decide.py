@@ -133,12 +133,13 @@ def test_accepts_needs_option_and_threshold():
     assert not Decision(choice="yes", confidence=0.6, source="jev").accepts("yes", 0.7)
     assert not Decision(choice="no", confidence=0.9, source="jev").accepts("yes", 0.7)
 
-async def test_long_state_is_truncated_keeping_the_end(deps, jev):
+async def test_long_state_is_truncated_keeping_the_start_and_the_end(deps, jev):
     jev.answers = {"has_feedback": 0.9}
-    await decide(deps, {"has_feedback": FEEDBACK}, "a" * 100_000 + "THE END")
+    await decide(deps, {"has_feedback": FEEDBACK}, "THE TEAM" + "a" * 100_000 + "THE END")
     _, state, _ = jev.calls[0]
     assert len(state) <= MAX_STATE_CHARS
-    assert state.startswith("…")
+    assert state.startswith("THE TEAM")
+    assert "…" in state
     assert state.endswith("THE END")
 
 async def test_short_state_is_sent_as_is(deps, jev):

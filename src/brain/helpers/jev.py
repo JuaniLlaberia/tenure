@@ -3,6 +3,8 @@ from typing import TYPE_CHECKING, Literal, Protocol
 import httpx
 from pydantic import BaseModel, ValidationError
 
+from brain.common import OutOfCredits, is_out_of_credits
+
 if TYPE_CHECKING:
     from brain.deps import Settings
 
@@ -52,6 +54,8 @@ class OpenRouterJev:
                 response = await client.post(self._url, json=body, headers=headers)
         except httpx.HTTPError as error:
             raise JevError(f"Jev request failed: {type(error).__name__}") from error
+        if is_out_of_credits(response.status_code, response.text):
+            raise OutOfCredits(model)
         if response.status_code != 200:
             raise JevError(f"Jev returned HTTP {response.status_code}")
         try:

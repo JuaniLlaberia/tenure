@@ -2,6 +2,7 @@ from brain.cli import seed_approvals
 from contract import (
     ActionDone,
     ApprovalDecision,
+    Ask,
     AutonomyLevel,
     IncomingMessage,
     LessonLearned,
@@ -50,7 +51,9 @@ async def test_demo_script(brain, collect, deps, jev, llm, script, clock):
     # 1. business onboarding
     await collect(brain.start_onboarding("b1"))
     site = say(None, "Here's our site: https://juans.studio", 1)
-    done = await collect(brain.handle_message(site))
+    asked = await collect(brain.handle_message(site))
+    assert of(asked, Ask)[-1].quick_replies == ["Skip (Los Angeles time)"]
+    done = await collect(brain.handle_message(say(None, "Skip (Los Angeles time)", 9)))
     assert of(done, OnboardingComplete)[0].scope == "business"
     assert (await deps.store.get_profile("b1")).name == "Juan's Studio"
 

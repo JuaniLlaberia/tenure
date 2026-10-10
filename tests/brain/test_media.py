@@ -153,7 +153,7 @@ async def test_photo_is_described_and_offered_to_the_writer(
 
     (part,) = media_parts(media_calls(llm)[0].messages)
     assert part["image_url"]["url"].startswith("data:image/jpeg;base64,")
-    assert f"[Photo f1: {STUDIO}]" in triage_state(jev)
+    assert "[Photo f1: <untrusted_data" in triage_state(jev) and STUDIO in triage_state(jev)
     assert "Maya is looking at your photo…" in [e.status for e in of(events, Progress)]
     prompt = writer_prompts(llm)[0]
     assert "f1" in prompt and STUDIO in prompt
@@ -239,7 +239,8 @@ async def test_text_document_needs_no_model(brain, collect, jev, llm, tools, scr
     await collect(brain.handle_message(with_files(message(team, "Post about this"), notes)))
 
     assert media_calls(llm) == []
-    assert "[Document notes.txt]\nLaunch is on Friday" in triage_state(jev)
+    assert "[Document notes.txt]\n<untrusted_data" in triage_state(jev)
+    assert "Launch is on Friday\n</untrusted_data>" in triage_state(jev)
 
 async def test_video_gets_a_polite_say(brain, collect, jev, llm, tools, team, message):
     clip = founder_file(tools, "c1", FileKind.VIDEO, "video/mp4", b"video")
@@ -427,10 +428,14 @@ async def test_onboarding_reads_a_document(brain, collect, deps, jev, llm, tools
     )
 
     extract = next(call for call in llm.calls if call.schema is Extraction)
-    prompt = str(extract.messages)
+    prompt = "\n".join(m["content"] for m in extract.messages)
     assert "about-us.pdf" in prompt
     assert "Juan's Studio designs logos for independent cafés." in prompt
     assert "Alex is reading your document…" in [e.status for e in of(events, Progress)]
+    skip = IncomingMessage(
+        business_id="b1", team_id=None, text="Skip (Los Angeles time)", message_id="m2", sent_at=NOW
+    )
+    await collect(brain.handle_message(skip))
     profile = await deps.store.get_profile("b1")
     assert profile is not None and profile.what_you_sell == "Logos"
 

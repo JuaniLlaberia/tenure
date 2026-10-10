@@ -4,7 +4,7 @@ from typing import Literal
 
 from pydantic import BaseModel
 
-from brain.context import MAX_FETCH_CHARS
+from brain.context import MAX_FETCH_CHARS, fence
 from brain.deps import Deps
 from brain.helpers.llm import Message
 from contract import FileKind, FileRef, Persona
@@ -146,9 +146,13 @@ def block(described: MediaText) -> str:
     if how == "audio":
         return f"[Voice note] {text}" if text else f"[Voice note: {UNREADABLE}]"
     if how == "image":
-        return f"[Photo {file.file_id}: {text or UNREADABLE}]"
+        if not text:
+            return f"[Photo {file.file_id}: {UNREADABLE}]"
+        return f"[Photo {file.file_id}: {fence(text, 'what the photo shows')}]"
     name = file.name or "document"
-    return f"[Document {name}]\n{text}" if text else f"[Document {name}: {UNREADABLE}]"
+    if not text:
+        return f"[Document {name}: {UNREADABLE}]"
+    return f"[Document {name}]\n{fence(text, f'the document {name}')}"
 
 def attachments_text(text: str, described: list[MediaText]) -> str:
     """

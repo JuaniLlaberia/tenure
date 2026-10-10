@@ -25,12 +25,83 @@ HAS_FEEDBACK = Question.yes_no(
     no="No feedback; it's only a request, a question or small talk",
 )
 
+ONE_OFF = Question.yes_no(
+    "Is any feedback in the founder's message only about this one piece of work (a date, a "
+    "topic, an offer or a detail for this request), rather than something the team should keep "
+    "doing from now on?",
+    yes="Only about this request; nothing to remember for later",
+    no="Something the team should remember, or there's no feedback",
+)
+
 NAMES_CHANNELS = Question.yes_no(
     "Does the founder's message say where it should go out: a channel or a format like a "
     "Bluesky or social post, a newsletter or an email?",
     yes="Yes: it names at least one channel or format",
     no="No: it asks for a campaign or promotion without saying where",
 )
+
+MENTIONS_IMAGE = Question.yes_no(
+    "Does the founder's message say whether this work should come with an image, picture or "
+    "graphic (either that they want one or that they don't)?",
+    yes="Yes: it says whether to make an image",
+    no="No: images aren't mentioned",
+)
+
+WANTS_IMAGE = Question.yes_no(
+    "Does the founder want an image, picture or graphic made for this work?",
+    yes="Yes: make an image",
+    no="No image, or it isn't clear",
+)
+
+CANCELS = Question.yes_no(
+    "The team asked the founder a question about their request. Does the founder's reply drop "
+    "the request (never mind, forget it, cancel, not now)?",
+    yes="They want to drop the request",
+    no="They answer the question, or say something else",
+)
+
+NEW_REQUEST = Question.yes_no(
+    "The team asked the founder a question about their request. Is the founder's reply a new, "
+    "unrelated request instead of an answer?",
+    yes="A new request that doesn't answer the question",
+    no="It answers the question, even briefly (like 'yes' or a channel name)",
+)
+
+IS_DRAFT_FEEDBACK = Question.yes_no(
+    "The team sent the founder a draft to approve. Is the founder's new message a change they "
+    "want to that draft (shorter, another tone, fix a fact, add or remove something), rather "
+    "than a new request, a question or something else?",
+    yes="A change to the draft",
+    no="A new request or something else",
+)
+
+OTHER_CHANNEL = Question.yes_no(
+    "Does the founder want something made for or posted on a channel other than Bluesky or "
+    "email, like Instagram, LinkedIn, TikTok, X (Twitter), Facebook or YouTube?",
+    yes="Yes: they name another channel for this work",
+    no="No: Bluesky, email, or no channel named",
+)
+
+WANTS_BLUESKY = Question.yes_no(
+    "The team offered to make a Bluesky post instead. Does the founder accept?",
+    yes="Yes, a Bluesky post",
+    no="No, or it isn't clear",
+)
+
+OTHER_CHANNEL_ASK = (
+    "I can only post to Bluesky and send emails for now. Want this as a Bluesky post instead?"
+)
+OTHER_CHANNEL_REPLIES = ["Yes, a Bluesky post", "No"]
+
+DROPPED = "Okay, I've dropped that request."
+SET_ASIDE = "I'll set aside my question about {topic} and start on this."
+
+IMAGE_QUESTION = "Want {name} to make an image for this?"
+NO_IMAGE_MADE = (
+    "{name} couldn't make the image this time, so this draft has none. Reject it with a note "
+    "about the image to try again."
+)
+IMAGE_REPLIES = ["Yes, make an image", "No image"]
 
 class ScheduleDraft(BaseModel):
     """
@@ -108,6 +179,33 @@ def schedule_messages(
             f"{cadence_words(current.cadence)}: {current.request}. Give only what they change "
             "and null for the rest."
         )
+    return [
+        {"role": "system", "content": system},
+        {"role": "user", "content": f"The founder's message:\n{request}"},
+    ]
+
+NAMES_SEND_TIME = Question.yes_no(
+    "Does the founder say one specific future time for this to go out or be sent (\"this Friday "
+    "at 6 PM\", \"tomorrow morning at 9\"), once, not repeating?",
+    yes="Yes: one time to send it",
+    no="No time, now, or a repeating time",
+)
+
+class SendTime(BaseModel):
+    """
+    When the founder wants the draft to go out, in their local time. Null when not said.
+    """
+
+    date: str | None = None
+    time: str | None = None
+
+def send_time_messages(request: str, today: str) -> list[Message]:
+    system = (
+        "Read when a solo founder wants their post or email to go out. Today is "
+        f"{today} (their local time). Reply as JSON: {{\"date\": \"YYYY-MM-DD\", \"time\": "
+        '"HH:MM"}, 24-hour local time. "Morning" is 09:00, "afternoon" 15:00, "evening" 18:00. '
+        "Use null for anything they didn't say."
+    )
     return [
         {"role": "system", "content": system},
         {"role": "user", "content": f"The founder's message:\n{request}"},
@@ -194,7 +292,22 @@ def plan_messages(
         user += f"\n\n{context}"
     return [{"role": "system", "content": system}, {"role": "user", "content": user}]
 
-def reply_messages(template: Template, request: str, context: str, no_match: bool) -> list[Message]:
+CANT_DELETE = (
+    "I can't delete posts from here. Undo it within 10 minutes from /activity, or delete it in "
+    "Bluesky."
+)
+
+def reply_messages(
+    template: Template,
+    request: str,
+    context: str,
+    no_match: bool,
+    others: list[tuple[Template, bool]] | None = None,
+) -> list[Message]:
+    """
+    `others` are the other teams the founder can hire, each with whether it's hired, so the
+    lead can send work that isn't its team's to the right team.
+    """
     if no_match:
         task = (
             "The request doesn't match anything your team does. Say so kindly in one or two "
@@ -205,10 +318,31 @@ def reply_messages(template: Template, request: str, context: str, no_match: boo
     task += (
         " Never write a draft, post or email in this reply: drafts only come from your team, "
         "through review. If they seem to want one, ask them to say what to make."
+        " Never say you posted, sent, scheduled or deleted anything. If they ask you to delete "
+        f'a post, say exactly: "{CANT_DELETE}"'
     )
+    if others:
+        task += "\n\n" + _others_section(others)
     system = _lead_system(template) + f"\n\n{task}"
     user = request if not context else f"{request}\n\n{context}"
     return [{"role": "system", "content": system}, {"role": "user", "content": user}]
+
+def _others_section(others: list[tuple[Template, bool]]) -> str:
+    lines = []
+    for other, hired in others:
+        makes = "; ".join(spec.description for spec in other.task_types.values())
+        name, lead = other.display_name, other.lead.persona.name
+        then = f"ask {lead} in the {name} topic."
+        if not hired:
+            then = f"Hire them with /hire {other.name}, then {then}"
+        else:
+            then = then[0].upper() + then[1:]
+        say = f"<What they asked for> is {name}'s work. {then}"
+        lines.append(f'- {name} makes: {makes}. If the request is theirs, say: "{say}"')
+    return (
+        "Other teams of this business (send work that's theirs to them, in one sentence, with "
+        "the thing asked for in plural or singular as it reads best):\n" + "\n".join(lines)
+    )
 
 def report_text(tasks: list[Task]) -> str | None:
     waiting = [t.title for t in tasks if t.status == TaskStatus.WAITING_APPROVAL]

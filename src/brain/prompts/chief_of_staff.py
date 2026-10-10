@@ -1,6 +1,6 @@
 from pydantic import BaseModel, field_validator
 
-from brain.context import MAX_FETCH_CHARS, profile_section
+from brain.context import MAX_FETCH_CHARS, UNTRUSTED_RULE, fence, profile_section
 from brain.helpers.decide import Question
 from brain.helpers.llm import Message
 from contract import BusinessProfile, PageContent, Persona, Team
@@ -57,6 +57,52 @@ ANSWER_CLEAR = Question(
     },
 )
 
+TOPICS = {
+    "name": "the business's name",
+    "what_you_sell": "what you sell",
+    "customers": "your customers",
+    "tone": "how you like to sound",
+}
+PLACEHOLDERS = {
+    "name": "Your business",
+    "what_you_sell": "Not told yet",
+    "customers": "Not told yet",
+}
+SKIPPED = "Let's skip that one for now. You can tell me about {topic} anytime here."
+STILL_SETTING_UP = "We're still setting up. Here's where we were:"
+TIMEZONE_QUESTION = "Last one: which city's time should the team use for posts and schedules?"
+TIMEZONE_SKIP = "Skip (Los Angeles time)"
+TIMEZONE_SET = "Got it: {city} time."
+PROFILE_UPDATED = "Updated your profile: {summary}"
+CHANGED_QUESTION = "What changed about your business?"
+CHANGE_PHRASES = {
+    "name": "the business is called {value}",
+    "what_you_sell": "you sell {value}",
+    "customers": "your customers are {value}",
+    "prices": "prices are {value}",
+    "tone": "you sound {value}",
+}
+
+UPDATES_PROFILE = Question.yes_no(
+    "Does the founder's message tell new or changed facts about their business: its name, what "
+    "they sell, their customers, prices, tone, or the city or timezone they work in?",
+    yes="Yes: something about the business changed",
+    no="No: a question, a request or small talk",
+)
+
+class TimezoneAnswer(BaseModel):
+    city: str | None = None
+    timezone: str | None = None
+
+def timezone_messages(text: str) -> list[Message]:
+    system = (
+        "Read which city's time a solo founder wants their team to use. Reply as JSON: "
+        '{"city": "Buenos Aires", "timezone": "America/Argentina/Buenos_Aires"}, with the city '
+        "as they'd say it and its IANA timezone name. If they skip, don't say a place, or the "
+        "message isn't about where they are, reply with nulls."
+    )
+    return [{"role": "system", "content": system}, {"role": "user", "content": text}]
+
 def _persona_line(persona: Persona) -> str:
     return (
         f"You are {persona.name}, the {persona.role} of a solo founder's business. "
@@ -104,8 +150,8 @@ def extract_messages(
         'customers, prices (as stated, e.g. "packages from $2,500"), tone (how they sound or '
         "want to sound), main_clients (named clients), links, extra (short key: value pairs). "
         "Leave a field null or empty only when nothing supports it. Put any other useful fact "
-        'about the business in "facts" as short sentences. Never invent anything. Reply as '
-        'JSON: {"fields": {...}, "facts": [...]}.'
+        'about the business in "facts" as short sentences. Never invent anything. '
+        f'{UNTRUSTED_RULE} Reply as JSON: {{"fields": {{...}}, "facts": [...]}}.'
     )
     user = f"Question: {question}\nAnswer: {answer}"
     for page in pages:
@@ -113,7 +159,7 @@ def extract_messages(
             source = f"File the founder sent, {page.title}"
         else:
             source = f"Website {page.url} ({page.title or 'no title'})"
-        user += f"\n\n{source}:\n{page.text[:MAX_FETCH_CHARS]}"
+        user += f"\n\n{source}:\n{fence(page.text[:MAX_FETCH_CHARS], source)}"
     user += f"\n\nAlready known: {draft.model_dump(exclude_defaults=True) or 'nothing'}"
     return [{"role": "system", "content": system}, {"role": "user", "content": user}]
 
