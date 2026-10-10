@@ -247,7 +247,22 @@ def plan_messages(
         user += f"\n\n{context}"
     return [{"role": "system", "content": system}, {"role": "user", "content": user}]
 
-def reply_messages(template: Template, request: str, context: str, no_match: bool) -> list[Message]:
+CANT_DELETE = (
+    "I can't delete posts from here. Undo it within 10 minutes from /activity, or delete it in "
+    "Bluesky."
+)
+
+def reply_messages(
+    template: Template,
+    request: str,
+    context: str,
+    no_match: bool,
+    others: list[tuple[Template, bool]] | None = None,
+) -> list[Message]:
+    """
+    `others` are the other teams the founder can hire, each with whether it's hired, so the
+    lead can send work that isn't its team's to the right team.
+    """
     if no_match:
         task = (
             "The request doesn't match anything your team does. Say so kindly in one or two "
@@ -258,10 +273,31 @@ def reply_messages(template: Template, request: str, context: str, no_match: boo
     task += (
         " Never write a draft, post or email in this reply: drafts only come from your team, "
         "through review. If they seem to want one, ask them to say what to make."
+        " Never say you posted, sent, scheduled or deleted anything. If they ask you to delete "
+        f'a post, say exactly: "{CANT_DELETE}"'
     )
+    if others:
+        task += "\n\n" + _others_section(others)
     system = _lead_system(template) + f"\n\n{task}"
     user = request if not context else f"{request}\n\n{context}"
     return [{"role": "system", "content": system}, {"role": "user", "content": user}]
+
+def _others_section(others: list[tuple[Template, bool]]) -> str:
+    lines = []
+    for other, hired in others:
+        makes = "; ".join(spec.description for spec in other.task_types.values())
+        name, lead = other.display_name, other.lead.persona.name
+        then = f"ask {lead} in the {name} topic."
+        if not hired:
+            then = f"Hire them with /hire {other.name}, then {then}"
+        else:
+            then = then[0].upper() + then[1:]
+        say = f"<What they asked for> is {name}'s work. {then}"
+        lines.append(f'- {name} makes: {makes}. If the request is theirs, say: "{say}"')
+    return (
+        "Other teams of this business (send work that's theirs to them, in one sentence, with "
+        "the thing asked for in plural or singular as it reads best):\n" + "\n".join(lines)
+    )
 
 def report_text(tasks: list[Task]) -> str | None:
     waiting = [t.title for t in tasks if t.status == TaskStatus.WAITING_APPROVAL]

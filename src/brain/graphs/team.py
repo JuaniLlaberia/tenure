@@ -589,8 +589,18 @@ def build_team_graph(
     async def reply(state: TeamState) -> dict:
         template = template_of(state)
         context = await build_context(deps, state["business_id"], state["team_id"], None)
+        hired = {team.template for team in await deps.store.list_teams(state["business_id"])}
+        others = [
+            (other, other.name in hired)
+            for other in deps.templates.values()
+            if other.name != template.name
+        ]
         messages = reply_messages(
-            template, state["request"], context, no_match=state.get("reply_reason") == "no_match"
+            template,
+            state["request"],
+            context,
+            no_match=state.get("reply_reason") == "no_match",
+            others=others,
         )
         completion = await deps.llm.complete(
             deps.settings.model_lead, messages, reasoning=state.get("reasoning", False)

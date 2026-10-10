@@ -6,6 +6,7 @@ from brain.deps import Settings
 from brain.helpers.images import OpenRouterImages
 from brain.helpers.jev import OpenRouterJev
 from brain.helpers.llm import OpenRouterLLM
+from brain.prompts.lead import CANT_DELETE
 from contract import Ask, Error, NeedsApproval, Say
 
 SETTINGS = Settings(openrouter_api_key="sk-test-key")
@@ -132,3 +133,40 @@ async def test_a_new_request_with_a_draft_pending_is_a_new_request(
     (other,) = of(events, NeedsApproval)
     assert other.task_id != draft.task_id
     assert (await deps.store.get_approval(draft.approval_id)).status == "pending"
+
+def reply_prompt(llm):
+    calls = [call for call in llm.calls if call.kind == "complete"]
+    return calls[-1].messages[0]["content"]
+
+async def test_the_lead_never_claims_a_delete(brain, collect, llm, script, team, message):
+    script(work=0.1)
+
+    await collect(brain.handle_message(message(team, "Delete my last post")))
+
+    prompt = reply_prompt(llm)
+    assert "Never say you posted, sent, scheduled or deleted anything" in prompt
+    assert CANT_DELETE in prompt
+
+async def test_work_for_an_unhired_team_points_to_hiring_it(
+    brain, collect, llm, script, team, message
+):
+    script(work=0.1)
+
+    await collect(brain.handle_message(message(team, "Make me a logo")))
+
+    prompt = reply_prompt(llm)
+    assert "is Design's work. Hire them with /hire design, then ask Iris in the Design topic." in (
+        prompt
+    )
+
+async def test_work_for_a_hired_team_points_to_its_topic(
+    brain, collect, llm, make_team, script, team, message
+):
+    await make_team(template="design")
+    script(work=0.1)
+
+    await collect(brain.handle_message(message(team, "Make me a logo")))
+
+    prompt = reply_prompt(llm)
+    assert "is Design's work. Ask Iris in the Design topic." in prompt
+    assert "/hire design" not in prompt
