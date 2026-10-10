@@ -40,12 +40,21 @@ NAMES_CHANNELS = Question.yes_no(
     no="No: it asks for a campaign or promotion without saying where",
 )
 
-WANTS_NO_IMAGE = Question.yes_no(
-    "Does the founder's request, or what the team knows about them, say this work should go "
-    "out without images, pictures or visuals?",
-    yes="Yes: no images for this",
-    no="No: images are fine, or images aren't mentioned",
+MENTIONS_IMAGE = Question.yes_no(
+    "Does the founder's message say whether this work should come with an image, picture or "
+    "graphic (either that they want one or that they don't)?",
+    yes="Yes: it says whether to make an image",
+    no="No: images aren't mentioned",
 )
+
+WANTS_IMAGE = Question.yes_no(
+    "Does the founder want an image, picture or graphic made for this work?",
+    yes="Yes: make an image",
+    no="No image, or it isn't clear",
+)
+
+IMAGE_QUESTION = "Want {name} to make an image for this?"
+IMAGE_REPLIES = ["Yes, make an image", "No image"]
 
 class ScheduleDraft(BaseModel):
     """

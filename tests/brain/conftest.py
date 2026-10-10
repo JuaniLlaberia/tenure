@@ -150,7 +150,8 @@ def script(jev, llm):
                 "passes_check": passes,
                 "names_channels": named,
                 "wants_schedule": 0.1,
-                "wants_no_image": 0.1,
+                "mentions_image": 0.9,
+                "wants_image": 0.9,
             }
         )
         routed = task_types if work >= 0.5 else ()

@@ -14,6 +14,8 @@ from brain.usage import MeteredImages, MeteredJev, MeteredLLM, UsageLog
 from contract import (
     Approval,
     ApprovalDecision,
+    Ask,
+    Cadence,
     FileKind,
     FileRef,
     Lesson,
@@ -22,6 +24,7 @@ from contract import (
     PostSocial,
     Progress,
     Say,
+    Schedule,
     SendEmail,
 )
 
@@ -137,49 +140,123 @@ async def test_with_design_the_post_gets_an_illustrator_step(
     assert task.steps == ["writer", "design:illustrator"]
     assert task.current_step == 2
 
-async def test_no_images_in_the_request_skips_the_illustrator(
+def unspecified(jev):
+    """
+    The request doesn't say whether to make an image; a clear yes in the answer means yes.
+    """
+    jev.answers["mentions_image"] = 0.1
+    jev.answers["wants_image"] = lambda state: 0.9 if "Yes, make an image" in state else 0.1
+
+async def test_asks_for_an_image_when_the_request_doesnt_say(
     brain, collect, deps, jev, campaign, images, marketing, design, message
 ):
     campaign()
-    jev.answers["wants_no_image"] = lambda state: 0.9 if "no images" in state else 0.1
+    unspecified(jev)
 
-    (needs,), _ = await draft(brain, collect, message, marketing, "Post about Friday, no images")
+    events = await collect(brain.handle_message(message(marketing, "Post about our Friday launch")))
 
-    task = await deps.store.get_task(needs.task_id)
-    assert task.steps == ["writer"]
-    assert needs.planned_action.images == []
-    assert images.calls == []
+    (ask,) = of(events, Ask)
+    assert ask.question == "Want Otto to make an image for this?"
+    assert ask.quick_replies == ["Yes, make an image", "No image"]
+    assert ask.persona.name == "Maya"
+    assert not of(events, NeedsApproval) and images.calls == []
 
-async def test_a_no_images_lesson_on_marketing_is_respected(
+async def test_yes_makes_the_image(
     brain, collect, deps, jev, campaign, images, marketing, design, message
 ):
     campaign()
-    jev.answers["wants_no_image"] = lambda state: 0.9 if "Never add images" in state else 0.1
-    await deps.store.save_lesson(
-        Lesson(
-            lesson_id="l-no-images",
-            business_id="b1",
-            team_id=marketing.team_id,
-            kind="preference",
-            text="Never add images to posts",
-            source="chat",
-            created_at=NOW,
-        )
-    )
+    unspecified(jev)
+    await collect(brain.handle_message(message(marketing, "Post about our Friday launch")))
 
-    (needs,), _ = await draft(brain, collect, message, marketing)
+    events = await collect(brain.handle_message(message(marketing, "Yes, make an image", "m2")))
 
+    (needs,) = of(events, NeedsApproval)
+    assert (await deps.store.get_task(needs.task_id)).steps == ["writer", "design:illustrator"]
+    assert len(needs.planned_action.images) == 1 and len(images.calls) == 1
+    assert deps.store.lessons == {}
+
+@pytest.mark.parametrize("answer", ["No image", "hmm, not sure"])
+async def test_no_or_unclear_drops_the_illustrator(
+    brain, collect, deps, jev, campaign, images, marketing, design, message, answer
+):
+    campaign()
+    unspecified(jev)
+    await collect(brain.handle_message(message(marketing, "Post about our Friday launch")))
+
+    events = await collect(brain.handle_message(message(marketing, answer, "m2")))
+
+    (needs,) = of(events, NeedsApproval)
     assert (await deps.store.get_task(needs.task_id)).steps == ["writer"]
-    assert images.calls == []
+    assert needs.planned_action.images == [] and images.calls == []
 
-async def test_without_design_the_no_images_question_is_not_asked(
+async def test_new_image_feedback_never_redraws_a_no_image_draft(
+    brain, collect, deps, jev, campaign, images, marketing, design, message
+):
+    campaign()
+    unspecified(jev)
+    jev.answers["about_image"] = 0.9
+    await collect(brain.handle_message(message(marketing, "Post about our Friday launch")))
+    events = await collect(brain.handle_message(message(marketing, "No image", "m2")))
+    (needs,) = of(events, NeedsApproval)
+
+    events = await reject(brain, collect, needs, "Use a warmer picture")
+
+    (again,) = of(events, NeedsApproval)
+    assert again.planned_action.images == [] and images.calls == []
+
+@pytest.mark.parametrize(
+    ("request_text", "wants", "steps"),
+    [
+        ("Post about Friday with an image", 0.9, ["writer", "design:illustrator"]),
+        ("Post about Friday, no image", 0.1, ["writer"]),
+    ],
+)
+async def test_a_request_that_says_never_asks(
+    brain, collect, deps, jev, campaign, marketing, design, message, request_text, wants, steps
+):
+    campaign()
+    jev.answers["mentions_image"] = 0.9
+    jev.answers["wants_image"] = wants
+
+    events = await collect(brain.handle_message(message(marketing, request_text)))
+
+    assert not of(events, Ask)
+    (needs,) = of(events, NeedsApproval)
+    assert (await deps.store.get_task(needs.task_id)).steps == steps
+
+async def test_without_design_the_image_question_is_not_asked(
     brain, collect, jev, campaign, marketing, message
 ):
     campaign()
+    unspecified(jev)
 
-    await draft(brain, collect, message, marketing)
+    events = await collect(brain.handle_message(message(marketing, "Post about Friday")))
 
-    assert not any("wants_no_image" in questions for _, _, questions in jev.calls)
+    assert not of(events, Ask)
+    assert not any("mentions_image" in questions for _, _, questions in jev.calls)
+
+async def test_a_scheduled_run_never_asks_and_makes_no_unasked_image(
+    brain, collect, deps, jev, campaign, images, marketing, design
+):
+    campaign()
+    unspecified(jev)
+    schedule = Schedule(
+        schedule_id="s1",
+        business_id="b1",
+        team_id=marketing.team_id,
+        title="Monday post",
+        request="Write a post about this week's tip",
+        cadence=Cadence(every="week", weekday=0),
+        created_at=NOW,
+    )
+    await deps.store.save_schedule(schedule)
+
+    events = await collect(brain.run_schedule("b1", "s1"))
+
+    assert not of(events, Ask)
+    (needs,) = of(events, NeedsApproval)
+    assert (await deps.store.get_task(needs.task_id)).steps == ["writer"]
+    assert images.calls == []
 
 async def test_illustrator_uses_the_design_teams_lessons(
     brain, collect, deps, llm, campaign, marketing, design, message

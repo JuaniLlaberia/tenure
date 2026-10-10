@@ -12,7 +12,7 @@ from pydantic import BaseModel, ValidationError
 
 from brain.check import run_check
 from brain.common import new_id
-from brain.context import build_context, lessons_section
+from brain.context import build_context
 from brain.deps import Deps
 from brain.flows.actions import execute_action
 from brain.flows.approvals import MAX_CHECKS
@@ -23,11 +23,14 @@ from brain.helpers.images import ImageError
 from brain.prompts.lead import (
     ABOUT_IMAGE,
     HAS_FEEDBACK,
+    IMAGE_QUESTION,
+    IMAGE_REPLIES,
     IS_CLEAR,
+    MENTIONS_IMAGE,
     NAMES_CHANNELS,
     ONE_OFF,
     STOPS_SCHEDULE,
-    WANTS_NO_IMAGE,
+    WANTS_IMAGE,
     WANTS_SCHEDULE,
     WEEKDAYS,
     LeadPlan,
@@ -112,6 +115,7 @@ class TeamState(TypedDict, total=False):
     reply_reason: str | None
     reasoning: bool
     ask_channels: bool
+    ask_image: bool
     history: list[str]
     routed: list[str]
     plan_question: str | None
@@ -155,6 +159,7 @@ def new_request(
         "reply_reason": None,
         "reasoning": False,
         "ask_channels": False,
+        "ask_image": False,
         "routed": [],
         "plan_question": None,
         "clarified": 0,
@@ -657,9 +662,9 @@ def build_team_graph(
         teams = await deps.store.list_teams(state["business_id"])
         ready = {team.template for team in teams if team.onboarded}
         hired = {team.template for team in teams}
-        no_images, image_tokens = await wants_no_image(state, plans, ready)
+        choice, image_tokens = await image_choice(state, plans, ready)
         tokens += image_tokens
-        if no_images:
+        if choice == "no":
             ready = set()
         for item in plans:
             task = Task(
@@ -697,28 +702,79 @@ def build_team_graph(
             "suggest": list(dict.fromkeys(suggest)),
             "assumptions": assumptions,
             "schedule_history": runs_after(state, [p.title for p in plans]),
+            "ask_image": choice == "ask",
             "tokens_used": tokens,
         }
 
-    async def wants_no_image(
+    async def image_choice(
         state: TeamState, plans: list[TaskPlan], ready: set[str]
-    ) -> tuple[bool, int]:
+    ) -> tuple[Literal["yes", "no", "ask"] | None, int]:
         """
-        Whether this request skips other teams' steps (the Design team's image) because the
-        request or the team's lessons say no images. Only asked when a planned task would get
-        such a step.
+        Whether this request comes with another team's image (the Design team's illustrator):
+        "yes" or "no" when the request says so, "ask" when it doesn't. None when no planned task
+        would get such a step. A scheduled run never asks: it makes an image only when its
+        request says so.
         """
         template = template_of(state)
         if not any(set(template.task_types[item.task_type].with_teams) & ready for item in plans):
-            return False, 0
-        lessons = await deps.store.list_lessons(state["business_id"], state["team_id"])
-        known = lessons_section(lessons)
-        text = f"Request:\n{state['request']}" + (f"\n\n{known}" if known else "")
-        decisions = await decide(deps, {"wants_no_image": WANTS_NO_IMAGE}, text)
-        return decisions["wants_no_image"].accepts("yes", threshold), decisions.tokens
+            return None, 0
+        questions = {"mentions_image": MENTIONS_IMAGE, "wants_image": WANTS_IMAGE}
+        decisions = await decide(deps, questions, f"Request:\n{state['request']}")
+        if decisions["mentions_image"].accepts("yes", threshold):
+            wants = decisions["wants_image"].accepts("yes", threshold)
+            return ("yes" if wants else "no"), decisions.tokens
+        return ("no" if state.get("schedule_id") else "ask"), decisions.tokens
+
+    def illustrator(state: TeamState) -> Persona | None:
+        """
+        Who would make the request's image: the specialist of the first other team's step.
+        """
+        for task_id in state.get("order") or []:
+            steps = load(state, task_id).task.steps
+            index = cross_step(steps)
+            if index is None:
+                continue
+            name, _, specialist_id = steps[index].rpartition(":")
+            home = deps.templates.get(name)
+            if home is not None and specialist_id in home.specialists:
+                return home.specialists[specialist_id].persona
+        return None
+
+    async def image(state: TeamState) -> dict:
+        """
+        The founder didn't say whether to make an image: ask. Anything but a clear yes means no
+        image, and the tasks drop the other team's steps.
+        """
+        template = template_of(state)
+        lead = template.lead.persona
+        maker = illustrator(state)
+        question = IMAGE_QUESTION.format(name=maker.name if maker else "the Design team")
+        ask = Ask(
+            team_id=state["team_id"], persona=lead, question=question, quick_replies=IMAGE_REPLIES
+        )
+        answer = str(interrupt(ask.model_dump(mode="json")))
+        decisions = await decide(
+            deps, {"wants_image": WANTS_IMAGE}, f"{lead.name}: {question}\nFounder: {answer}"
+        )
+        update: dict = {
+            "ask_image": False,
+            "tokens_used": state.get("tokens_used", 0) + decisions.tokens,
+        }
+        if decisions["wants_image"].accepts("yes", threshold):
+            return update
+        tasks = dict(state["tasks"])
+        for task_id in state["order"]:
+            ts = load(state, task_id)
+            own = [step for step in ts.task.steps if ":" not in step]
+            if own != ts.task.steps:
+                task = await save(ts.task, steps=own)
+                tasks[task_id] = ts.model_copy(update={"task": task}).model_dump(mode="json")
+        return {**update, "tasks": tasks}
 
     def after_plan(state: TeamState) -> str:
-        return "clarify" if state.get("plan_question") else "dispatch"
+        if state.get("plan_question"):
+            return "clarify"
+        return "image" if state.get("ask_image") else "dispatch"
 
     async def clarify(state: TeamState) -> dict:
         template = template_of(state)
@@ -1186,6 +1242,7 @@ def build_team_graph(
         ("change_schedule", change_schedule),
         ("schedule_day", schedule_day),
         ("schedule_save", schedule_save),
+        ("image", image),
         ("dispatch", dispatch),
         ("specialist", specialist),
         ("check", check),
@@ -1213,7 +1270,8 @@ def build_team_graph(
     graph.add_conditional_edges(
         "route", lambda s: "plan" if s["routed"] else "reply", ["plan", "reply"]
     )
-    graph.add_conditional_edges("plan", after_plan, ["clarify", "dispatch"])
+    graph.add_conditional_edges("plan", after_plan, ["clarify", "image", "dispatch"])
+    graph.add_edge("image", "dispatch")
     graph.add_edge("clarify", "route")
     graph.add_conditional_edges(
         "dispatch",
