@@ -11,6 +11,7 @@ from app.chat.flows import Flows
 from app.fake_brain import FakeBrain
 from app.store.memory import InMemoryStore
 from app.web.api import create_api
+from app.web.overview import build_overview
 from contract import AutonomyLevel, ModelUsage
 
 CHAT = -1001234567890
@@ -125,6 +126,39 @@ async def test_overview_after_onboarding(client, flows, chat, store):
     }
     assert [t["hired"] for t in data["templates"]] == [True, False, False]
     assert data["stats"]["waiting"] == 0
+
+class Counting:
+    """
+    The store, counting the calls the overview makes.
+    """
+
+    def __init__(self, store: InMemoryStore) -> None:
+        self._store = store
+        self.calls: list[str] = []
+
+    def __getattr__(self, name: str):
+        method = getattr(self._store, name)
+
+        async def counted(*args, **kwargs):
+            self.calls.append(name)
+            return await method(*args, **kwargs)
+
+        return counted
+
+async def test_the_overview_does_not_query_per_draft(client, flows, chat, store, brain, clock):
+    _, thread_id = await setup(flows, chat, client)
+    await say(flows, REQUEST, thread_id)
+    await say(flows, "And another post about the Saturday workshop", thread_id)
+    counting = Counting(store)
+    business_id = flows._state.businesses[CHAT]
+
+    data = await build_overview(counting, brain, business_id, clock())
+
+    assert len(data["drafts"]) >= 3
+    assert "get_task" not in counting.calls and "get_trust" not in counting.calls
+    kinds = {(d["team_id"], d["type"]) for d in data["drafts"]}
+    assert counting.calls.count("list_lessons") == len(kinds)
+    assert counting.calls.count("list_trust") == len(data["teams"])
 
 async def test_drafts_show_and_approve_reaches_telegram(client, flows, chat, store):
     token, thread_id = await setup(flows, chat, client)
