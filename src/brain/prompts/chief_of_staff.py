@@ -57,6 +57,44 @@ ANSWER_CLEAR = Question(
     },
 )
 
+TOPICS = {
+    "name": "the business's name",
+    "what_you_sell": "what you sell",
+    "customers": "your customers",
+    "tone": "how you like to sound",
+}
+PLACEHOLDERS = {
+    "name": "Your business",
+    "what_you_sell": "Not told yet",
+    "customers": "Not told yet",
+}
+SKIPPED = "Let's skip that one for now. You can tell me about {topic} anytime here."
+STILL_SETTING_UP = "We're still setting up. Here's where we were:"
+TIMEZONE_QUESTION = "Last one: which city's time should the team use for posts and schedules?"
+TIMEZONE_SKIP = "Skip (Los Angeles time)"
+TIMEZONE_SET = "Got it: {city} time."
+PROFILE_UPDATED = "Updated your profile: {summary}"
+
+UPDATES_PROFILE = Question.yes_no(
+    "Does the founder's message tell new or changed facts about their business: its name, what "
+    "they sell, their customers, prices, tone, or the city or timezone they work in?",
+    yes="Yes: something about the business changed",
+    no="No: a question, a request or small talk",
+)
+
+class TimezoneAnswer(BaseModel):
+    city: str | None = None
+    timezone: str | None = None
+
+def timezone_messages(text: str) -> list[Message]:
+    system = (
+        "Read which city's time a solo founder wants their team to use. Reply as JSON: "
+        '{"city": "Buenos Aires", "timezone": "America/Argentina/Buenos_Aires"}, with the city '
+        "as they'd say it and its IANA timezone name. If they skip, don't say a place, or the "
+        "message isn't about where they are, reply with nulls."
+    )
+    return [{"role": "system", "content": system}, {"role": "user", "content": text}]
+
 def _persona_line(persona: Persona) -> str:
     return (
         f"You are {persona.name}, the {persona.role} of a solo founder's business. "

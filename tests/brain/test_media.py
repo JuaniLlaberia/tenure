@@ -432,6 +432,10 @@ async def test_onboarding_reads_a_document(brain, collect, deps, jev, llm, tools
     assert "about-us.pdf" in prompt
     assert "Juan's Studio designs logos for independent cafés." in prompt
     assert "Alex is reading your document…" in [e.status for e in of(events, Progress)]
+    skip = IncomingMessage(
+        business_id="b1", team_id=None, text="Skip (Los Angeles time)", message_id="m2", sent_at=NOW
+    )
+    await collect(brain.handle_message(skip))
     profile = await deps.store.get_profile("b1")
     assert profile is not None and profile.what_you_sell == "Logos"
 

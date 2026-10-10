@@ -35,6 +35,7 @@ from brain.media import (
     status,
     unheard,
 )
+from brain.prompts.chief_of_staff import STILL_SETTING_UP
 from brain.prompts.lead import (
     ABOUT_IMAGE,
     CANCELS,
@@ -424,8 +425,14 @@ class TenureBrain:
                 ),
             )
             return
+        config = _thread(f"{business_id}:company")
+        snapshot = await self.company_graph.aget_state(config)
+        if snapshot.interrupts:
+            yield Say(team_id=None, persona=CHIEF_OF_STAFF, text=STILL_SETTING_UP)
+            yield Ask.model_validate(snapshot.interrupts[0].value)
+            return
         payload = {"business_id": business_id, "restart": True, "message": None}
-        async for event in _stream(self.company_graph, _thread(f"{business_id}:company"), payload):
+        async for event in _stream(self.company_graph, config, payload):
             yield event
 
     async def _company(self, msg: IncomingMessage) -> AsyncIterator[Event]:
