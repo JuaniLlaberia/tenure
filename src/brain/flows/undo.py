@@ -2,10 +2,11 @@ from collections.abc import AsyncIterator
 
 from brain.common import guarded
 from brain.deps import Deps
-from brain.flows.autonomy import reset_streak
-from contract import ActionUndone, AuditEntry, Error, Event
+from brain.flows.autonomy import back_to_asking, gate, reset_streak
+from contract import ActionUndone, AuditEntry, Error, Event, Say
 
 UNDONE = "Deleted the Bluesky post"
+ASKING_AGAIN = "Undone. I'll ask before posting again; I can earn it back with a few approvals."
 
 async def undo_action(deps: Deps, business_id: str, action_id: str) -> AsyncIterator[Event]:
     async for event in guarded(_undo(deps, business_id, action_id)):
@@ -45,8 +46,13 @@ async def _undo(deps: Deps, business_id: str, action_id: str) -> AsyncIterator[E
         )
         return
     await deps.store.log_action(entry.model_copy(update={"undone_at": now}))
-    await _reset_streak(deps, entry)
+    lowered = await _lower_trust(deps, entry)
     yield ActionUndone(action_id=entry.action_id, team_id=entry.team_id, summary=UNDONE)
+    if lowered:
+        team = await deps.store.get_team(entry.team_id)
+        template = deps.templates.get(team.template) if team else None
+        if template is not None:
+            yield Say(team_id=entry.team_id, persona=template.lead.persona, text=ASKING_AGAIN)
 
 def _cannot_undo(entry: AuditEntry, now) -> str | None:
     if entry.undone_at is not None:
@@ -57,10 +63,19 @@ def _cannot_undo(entry: AuditEntry, now) -> str | None:
         return "The 10-minute undo window has passed."
     return None
 
-async def _reset_streak(deps: Deps, entry: AuditEntry) -> None:
+async def _lower_trust(deps: Deps, entry: AuditEntry) -> bool:
+    """
+    Undo resets the streak. When the team had acted on its own (no approval), it also goes
+    back to asking first; returns whether it did.
+    """
     task = await deps.store.get_task(entry.task_id)
     if task is None:
-        return
+        return False
     trust = await deps.store.get_trust(entry.team_id, task.task_type)
-    if trust is not None:
-        await deps.store.set_trust(reset_streak(trust, deps.clock()))
+    if trust is None:
+        return False
+    if entry.approval_id is None and gate(trust.level) != "approval":
+        await deps.store.set_trust(back_to_asking(trust, deps.clock()))
+        return True
+    await deps.store.set_trust(reset_streak(trust, deps.clock()))
+    return False
