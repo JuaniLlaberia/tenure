@@ -57,6 +57,13 @@ EDIT_MORE = "em"
 EDIT_UNDO = "eu"
 STOP = "ss"
 TURN_ON = "so"
+PROMPT_CANCEL = "pc"
+RETRY = "rt"
+SCHEDULE = "sc"
+SCHEDULE_AT = "sa"
+SEND_NOW = "sn"
+UNSCHEDULE = "su"
+MESSAGE_LIMIT = 4000
 
 TASK_TITLES = {
     "social_post": "Bluesky post",
@@ -82,6 +89,7 @@ HELP = (
     "/activity: what went out, with Undo, and this week's tasks\n"
     "/spend: what the models cost this week\n"
     "/cancel: stop an edit or a reason you started\n"
+    "/stop: stop what the team in this topic is working on\n"
     "/dashboard: get the dashboard link and a new password\n"
     "/dashboard_stop: turn the dashboard off; the next /dashboard gets a new link\n\n"
     "In a team's topic these show that team; in General, the whole business. "
@@ -129,6 +137,25 @@ IMAGE_REASON_PROMPT = (
     "What should change in the image? Your next message here is the reason. /cancel to skip."
 )
 EDITED_ON_DASHBOARD = "✎ Edited on the dashboard"
+EDIT_TIMED_OUT = "The edit timed out. The draft is unchanged."
+REASON_TIMED_OUT = "The reason timed out. The draft is waiting for you."
+IMAGE_TIMED_OUT = "The image request timed out. The draft is waiting for you."
+TIME_TIMED_OUT = "No time was set. The draft is waiting for you."
+REVISED_BELOW = "↻ Revised below"
+NEEDS_ADMIN = (
+    "I need to be an admin who can <b>manage topics</b> to give each team its own topic.\n"
+    "Open the group settings → Administrators → add me and turn on “Manage topics”. "
+    "Then send /start again."
+)
+SETUP_FIRST = "Let's finish setting up first: answer Alex's question in General, then hire a team."
+TOO_LONG_RUN = "⚠️ This took too long, so I stopped it. Nothing was sent. Please try again."
+NOTHING_RUNNING = "Nothing is running here right now."
+QUEUED_RUN = "⏳ Queued: runs after the current draft"
+OTHER_TIME_PROMPT = "Send the time, like “Fri 18:00” or “16 Oct 9:30”. /cancel to skip."
+BAD_TIME = "I couldn't read that time. Try “Fri 18:00” or “16 Oct 9:30”, or /cancel."
+PAST_TIME = "That time has passed. Send a later one, or /cancel."
+SENDING_NOW = "✓ Approved · sending now"
+SCHEDULE_CANCELLED = "Schedule cancelled. The draft is waiting for you."
 
 def text(value: str) -> str:
     return escape(value, quote=False)
@@ -197,17 +224,82 @@ def approval_text(event: NeedsApproval, images_above: bool = False) -> str:
     )
 
 def approval_keyboard(
-    approval_id: str, editable: bool = True, new_image: bool = False
+    approval_id: str,
+    editable: bool = True,
+    new_image: bool = False,
+    timing: str | None = None,
 ) -> Keyboard:
+    """
+    `timing`: None for drafts without an action, "none" for an action with no send time
+    (it can get one), "timed" for an action with a send time.
+    """
     approve = Button("✓ Approve", f"{APPROVE}:{approval_id}")
     reject = Button("✕ Reject", f"{REJECT}:{approval_id}")
     row = [approve, Button("✎ Edit", f"{EDIT}:{approval_id}"), reject] if editable else [
         approve,
         reject,
     ]
-    if not new_image:
-        return [row]
-    return [row, [Button("↻ New image", f"{NEW_IMAGE}:{approval_id}")]]
+    extra = [Button("↻ New image", f"{NEW_IMAGE}:{approval_id}")] if new_image else []
+    if timing == "none":
+        extra.append(Button("⏰ Schedule", f"{SCHEDULE}:{approval_id}"))
+    elif timing == "timed":
+        extra.append(Button("⏰ Change time", f"{SCHEDULE}:{approval_id}"))
+        extra.append(Button("Send now", f"{SEND_NOW}:{approval_id}"))
+    return [row, extra] if extra else [row]
+
+def failed_keyboard(approval_id: str, editable: bool) -> Keyboard:
+    retry = Button("↻ Try again", f"{RETRY}:{approval_id}")
+    reject = Button("✕ Reject", f"{REJECT}:{approval_id}")
+    if not editable:
+        return [[retry, reject]]
+    return [[retry, Button("✎ Edit", f"{EDIT}:{approval_id}"), reject]]
+
+def failed_footer(message: str) -> str:
+    return f"⚠️ {message.strip().rstrip('.')}. Nothing went out."
+
+def failed_on_dashboard(message: str) -> str:
+    return f"{failed_footer(message)} The draft is back in Drafts."
+
+def error_line(message: str) -> str:
+    return f"⚠️ {text(message)}"
+
+def prompt_cancel_keyboard(approval_id: str) -> Keyboard:
+    return [[Button("Cancel", f"{PROMPT_CANCEL}:{approval_id}")]]
+
+def revising(reason: str) -> str:
+    return f"↻ Revising: {clip(reason.strip(), 200)}"
+
+def rejected_queued(name: str) -> str:
+    return f"✕ Rejected · {name} revises it after the current draft"
+
+def local_when(moment: datetime, timezone: str) -> str:
+    local = moment.astimezone(ZoneInfo(timezone))
+    return f"{local:%a} {local.day} {local:%b}, {local.hour}:{local.minute:02d}"
+
+def goes_out(moment: datetime, timezone: str) -> str:
+    return f"⏰ Goes out {local_when(moment, timezone)} ({_place(timezone)} time) once you approve"
+
+def scheduled_footer(moment: datetime, timezone: str) -> str:
+    return f"✓ Approved · ⏰ goes out {local_when(moment, timezone)}"
+
+def when_prompt(timezone: str) -> str:
+    return f"⏰ When should it go out? ({_place(timezone)} time)"
+
+def when_keyboard(approval_id: str) -> Keyboard:
+    def choice(label: str, key: str) -> Button:
+        return Button(label, f"{SCHEDULE_AT}:{approval_id}:{key}")
+
+    return [
+        [choice("In 1 hour", "hour"), choice("Tomorrow 9:00", "tomorrow")],
+        [choice("Monday 9:00", "monday"), choice("Other time", "other")],
+        [choice("Cancel", "cancel")],
+    ]
+
+def scheduled_keyboard(approval_id: str) -> Keyboard:
+    return [[
+        Button("Send now", f"{SEND_NOW}:{approval_id}"),
+        Button("Cancel schedule", f"{UNSCHEDULE}:{approval_id}"),
+    ]]
 
 def new_image_keyboard(approval_id: str) -> Keyboard:
     return [[
@@ -407,6 +499,38 @@ def replacing(name: str) -> str:
 def kept(name: str) -> str:
     return f"Kept your current {name} team."
 
+def unknown_team(name: str) -> str:
+    return f"I don't know a team called “{text(name)}”. Which team do you want to hire?"
+
+def queued(name: str) -> str:
+    return f"<i>⏳ Queued: {text(name)} gets to this after the current draft.</i>"
+
+def stopped(name: str) -> str:
+    return f"Stopped {text(name)}'s current work. Nothing was sent."
+
+def topic_reopened(icon: str | None, name: str) -> str:
+    label = f"{icon} {name}" if icon else name
+    return (
+        f"The {text(label)} topic was deleted, so I opened a new one. "
+        f"{text(name)}'s messages go there now."
+    )
+
+def split_text(value: str, limit: int = MESSAGE_LIMIT) -> list[str]:
+    """
+    Splits a long message at line breaks (or spaces) into parts Telegram accepts. HTML tags
+    only appear in the header line, so the cuts never land inside one.
+    """
+    parts = []
+    while len(value) > limit:
+        cut = value.rfind("\n", 0, limit)
+        if cut <= 0:
+            cut = value.rfind(" ", 0, limit)
+        if cut <= 0:
+            cut = limit
+        parts.append(value[:cut])
+        value = value[cut:].lstrip("\n ")
+    return [*parts, value]
+
 DASHBOARD_STOPPED = (
     "Dashboard turned off. The old link and password no longer work. "
     "Send /dashboard to turn it on with a new link."
@@ -461,14 +585,18 @@ def when(moment: datetime, timezone: str) -> str:
     local = moment.astimezone(ZoneInfo(timezone))
     return f"{local:%a %b} {local.day}, {local.hour}:{local.minute:02d}"
 
-def schedule_text(persona: Persona, schedule: Schedule, running: bool = False) -> str:
+def schedule_text(
+    persona: Persona, schedule: Schedule, running: bool = False, queued: bool = False
+) -> str:
     title = text(schedule.title)
     if not schedule.active:
         return f"{header(persona)}<s>🔁 {title}</s>\n<i>{SCHEDULE_STOPPED}</i>"
     upcoming = "being scheduled"
     if schedule.next_run_at is not None:
         upcoming = when(schedule.next_run_at, schedule.cadence.timezone)
-    if running:
+    if queued:
+        status = f"{QUEUED_RUN} · next: {upcoming}"
+    elif running:
         status = f"Running now · next: {upcoming}"
     else:
         status = f"Next: {upcoming} · drafts wait for your OK"

@@ -1,7 +1,7 @@
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 
-from app.chat.port import Keyboard
+from app.chat.port import Keyboard, TopicGone
 
 NOW = datetime(2026, 10, 8, 12, 0, tzinfo=UTC)
 
@@ -29,8 +29,15 @@ class FakeChat:
         self.deleted_topics: list[int] = []
         self.typing_calls = 0
         self.files: dict[str, bytes] = {}
+        self.manages_topics = True
+        self.gone: set[int] = set()
+
+    async def can_manage_topics(self, chat_id) -> bool:
+        return self.manages_topics
 
     async def send(self, chat_id, thread_id, text, keyboard=None) -> int:
+        if thread_id in self.gone:
+            raise TopicGone(thread_id)
         message_id = len(self.messages) + len(self.deleted) + 1
         self.messages[message_id] = Sent(message_id, thread_id, text, keyboard or [])
         return message_id
@@ -86,6 +93,21 @@ class FakeChat:
         matches = [m for m in self.messages.values() if part in m.text]
         assert matches, f"No message containing {part!r}"
         return matches[-1]
+
+class FakeBluesky:
+    def __init__(self) -> None:
+        self.posts: list[tuple[str, list]] = []
+
+    async def post(self, text, images=None):
+        self.posts.append((text, images or []))
+        n = len(self.posts)
+        return f"at://did:plc:x/app.bsky.feed.post/{n}", f"https://bsky.app/profile/x/post/{n}"
+
+    async def delete(self, uri) -> None:
+        pass
+
+    async def find(self, text, within):
+        return None
 
 class Clock:
     def __init__(self) -> None:

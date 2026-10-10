@@ -16,6 +16,7 @@ from uuid import uuid4
 
 from PIL import Image, ImageDraw
 
+from app.chat import when
 from app.store.memory import InMemoryStore
 from contract import (
     ActionDone,
@@ -65,6 +66,10 @@ PROMOTION_STREAK = 5
 TOKENS_PER_STEP = 850
 EMAIL = re.compile(r"[\w.+-]+@[\w-]+(\.[\w-]+)+")
 POST_LIMIT = 300
+SEND_TIME = re.compile(
+    r"\b(?:tomorrow|(?:mon|tues|wednes|thurs|fri|satur|sun)day)\s+at\s+\d{1,2}(?::\d{2})?\s*(?:am|pm)?",
+    re.IGNORECASE,
+)
 LADDER = list(AutonomyLevel)
 ACTS_ALONE = (AutonomyLevel.ACT_AND_REPORT, AutonomyLevel.AUTONOMOUS)
 CHIEF = Persona(name="Alex", role="Chief of staff", avatar="company/alex.png")
@@ -713,7 +718,8 @@ class FakeBrain:
     async def _gate(self, ctx: _Ctx, task: Task) -> AsyncIterator[Event]:
         preview, action = await self._draft(task)
         level = (await self._trust(ctx, task.task_type)).level
-        if level in ACTS_ALONE:
+        send_at = self._send_time(task.brief) if action is not None else None
+        if level in ACTS_ALONE and send_at is None:
             if action is None:
                 await self._save_status(task, TaskStatus.DONE)
                 yield Say(
@@ -738,6 +744,7 @@ class FakeBrain:
             planned_action=planned_action,
             media=media,
             check_confidence=round(0.9 - 0.05 * task.revisions, 2),
+            send_at=send_at if planned_action is not None else None,
             created_at=self._clock(),
         )
         await self._store.save_approval(approval)
@@ -752,7 +759,17 @@ class FakeBrain:
             planned_action=planned_action,
             media=media,
             check_confidence=approval.check_confidence,
+            send_at=approval.send_at,
         )
+
+    def _send_time(self, request: str) -> datetime | None:
+        """
+        "… on Friday at 6pm": a one-off send time, read in Los Angeles time (contract v0.8).
+        """
+        found = SEND_TIME.search(request)
+        if found is None:
+            return None
+        return when.parse(found.group(0), self._clock(), "America/Los_Angeles")
 
     async def _newsletter_address(self, task: Task) -> str:
         for lesson in await self._store.list_lessons(task.business_id, task.team_id):
@@ -866,8 +883,11 @@ class FakeBrain:
         await self._store.save_approval(approval)
 
     async def _approve(self, ctx: _Ctx, task: Task, approval: Approval) -> AsyncIterator[Event]:
-        await self._resolve(approval, "approved")
+        """
+        Like the real brain: an action that fails leaves the draft pending.
+        """
         if approval.planned_action is None:
+            await self._resolve(approval, "approved")
             await self._save_status(task, TaskStatus.DONE)
             yield Say(
                 team_id=task.team_id,
@@ -880,6 +900,7 @@ class FakeBrain:
             yield outcome
             if isinstance(outcome, Error):
                 return
+            await self._resolve(approval, "approved")
         trust = await self._trust(ctx, task.task_type)
         await self._set_streak(ctx, task.task_type, trust.approval_streak + 1)
         offer = await self._promotion_offer(ctx, task.task_type)
@@ -923,17 +944,19 @@ class FakeBrain:
                 recoverable=True,
             )
             return
-        await self._resolve(approval, "edited", edited_text=edited_text)
-        if edited_action is not None:
-            yield await self._execute(task, edited_action, approval.approval_id)
-        elif isinstance(action, PostSocial):
+        edited = edited_action
+        if edited is None and isinstance(action, PostSocial):
             edited = action.model_copy(update={"text": edited_text})
-            yield await self._execute(task, edited, approval.approval_id)
-        elif isinstance(action, SendEmail):
+        elif edited is None and isinstance(action, SendEmail):
             edited = action.model_copy(update={"body": edited_text})
-            yield await self._execute(task, edited, approval.approval_id)
+        if edited is not None:
+            outcome = await self._execute(task, edited, approval.approval_id)
+            yield outcome
+            if isinstance(outcome, Error):
+                return
         else:
             await self._save_status(task, TaskStatus.DONE)
+        await self._resolve(approval, "edited", edited_text=edited_text)
         await self._set_streak(ctx, task.task_type, 0)
         lesson = "Match the founder's edits in wording and length"
         async for event in self._lesson(ctx, task, lesson, "edit", approval.approval_id):

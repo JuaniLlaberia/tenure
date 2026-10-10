@@ -18,7 +18,7 @@ from telegram import (
     Message,
     Update,
 )
-from telegram.constants import ChatAction, ChatType, ParseMode
+from telegram.constants import ChatAction, ChatMemberStatus, ChatType, ParseMode
 from telegram.error import BadRequest, RetryAfter, TimedOut
 from telegram.ext import (
     Application,
@@ -32,7 +32,7 @@ from telegram.ext import (
 
 from app.chat import ui
 from app.chat.flows import Flows
-from app.chat.port import IncomingFile, Keyboard
+from app.chat.port import IncomingFile, Keyboard, TopicGone
 from app.store.base import AppStore
 from contract import Brain
 
@@ -87,6 +87,27 @@ def _markup(keyboard: Keyboard | None) -> InlineKeyboardMarkup | None:
 def _thread(message: Message) -> int | None:
     return message.message_thread_id if message.is_topic_message else None
 
+def _reply_to(message: Message) -> int | None:
+    """
+    The message this one answers, unless it's the topic's opening message (in a topic every
+    message counts as a reply to it).
+    """
+    replied = message.reply_to_message
+    if replied is None or replied.forum_topic_created is not None:
+        return None
+    return replied.message_id
+
+async def _to_thread(thread_id: int | None, call: Callable[[], Awaitable[T]]) -> T:
+    """
+    Turns Telegram's "thread not found" into TopicGone, so the flows can open the topic again.
+    """
+    try:
+        return await call()
+    except BadRequest as error:
+        if thread_id is not None and "thread not found" in str(error).lower():
+            raise TopicGone(thread_id) from error
+        raise
+
 def _incoming_file(message: Message) -> IncomingFile | None:
     """
     The photo (largest size), voice note, audio, document or video in a message.
@@ -118,16 +139,19 @@ class TelegramChat:
     async def send(
         self, chat_id: int, thread_id: int | None, text: str, keyboard: Keyboard | None = None
     ) -> int:
-        message = await _retry(
-            lambda: self._bot.send_message(
-                chat_id=chat_id,
-                text=text,
-                parse_mode=ParseMode.HTML,
-                message_thread_id=thread_id,
-                reply_markup=_markup(keyboard),
-                link_preview_options=NO_PREVIEW,
+        message = await _to_thread(
+            thread_id,
+            lambda: _retry(
+                lambda: self._bot.send_message(
+                    chat_id=chat_id,
+                    text=text,
+                    parse_mode=ParseMode.HTML,
+                    message_thread_id=thread_id,
+                    reply_markup=_markup(keyboard),
+                    link_preview_options=NO_PREVIEW,
+                ),
+                repeatable=False,
             ),
-            repeatable=False,
         )
         return message.message_id
 
@@ -229,16 +253,19 @@ class TelegramChat:
         caption: str = "",
         keyboard: Keyboard | None = None,
     ) -> int:
-        message = await _retry(
-            lambda: self._bot.send_photo(
-                chat_id=chat_id,
-                photo=photo,
-                caption=caption or None,
-                parse_mode=ParseMode.HTML,
-                message_thread_id=thread_id,
-                reply_markup=_markup(keyboard),
+        message = await _to_thread(
+            thread_id,
+            lambda: _retry(
+                lambda: self._bot.send_photo(
+                    chat_id=chat_id,
+                    photo=photo,
+                    caption=caption or None,
+                    parse_mode=ParseMode.HTML,
+                    message_thread_id=thread_id,
+                    reply_markup=_markup(keyboard),
+                ),
+                repeatable=False,
             ),
-            repeatable=False,
         )
         return message.message_id
 
@@ -251,17 +278,30 @@ class TelegramChat:
             else InputMediaPhoto(photo)
             for n, photo in enumerate(photos)
         ]
-        messages = await _retry(
-            lambda: self._bot.send_media_group(
-                chat_id=chat_id, media=media, message_thread_id=thread_id
+        messages = await _to_thread(
+            thread_id,
+            lambda: _retry(
+                lambda: self._bot.send_media_group(
+                    chat_id=chat_id, media=media, message_thread_id=thread_id
+                ),
+                repeatable=False,
             ),
-            repeatable=False,
         )
         return [message.message_id for message in messages]
 
     async def download(self, telegram_id: str) -> bytes:
         file = await _retry(lambda: self._bot.get_file(telegram_id), repeatable=True)
         return bytes(await file.download_as_bytearray())
+
+    async def can_manage_topics(self, chat_id: int) -> bool:
+        member = await _retry(
+            lambda: self._bot.get_chat_member(chat_id, self._bot.id), repeatable=True
+        )
+        if member.status == ChatMemberStatus.OWNER:
+            return True
+        return member.status == ChatMemberStatus.ADMINISTRATOR and bool(
+            getattr(member, "can_manage_topics", False)
+        )
 
 def build_application(
     token: str, brain: Brain, store: AppStore, dashboard_url: str
@@ -295,6 +335,10 @@ def build_application(
         message = update.effective_message
         await flows.on_cancel(message.chat_id, _thread(message))
 
+    async def stop(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+        message = update.effective_message
+        await flows.on_stop(message.chat_id, _thread(message))
+
     async def help_(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         message = update.effective_message
         await flows.on_help(message.chat_id, _thread(message))
@@ -319,7 +363,12 @@ def build_application(
         if message.from_user is None or message.from_user.is_bot:
             return
         await flows.on_text(
-            message.chat_id, _thread(message), message.text, message.message_id, message.date
+            message.chat_id,
+            _thread(message),
+            message.text,
+            message.message_id,
+            message.date,
+            _reply_to(message),
         )
 
     async def media(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -356,10 +405,12 @@ def build_application(
     async def failed(update: object, context: ContextTypes.DEFAULT_TYPE) -> None:
         logger.error("Telegram update failed", exc_info=context.error)
 
-    groups = filters.ChatType.GROUPS
-    application.add_handler(CommandHandler("start", start))
+    new = filters.UpdateType.MESSAGE
+    groups = filters.ChatType.GROUPS & new
+    application.add_handler(CommandHandler("start", start, filters=new))
     application.add_handler(CommandHandler("hire", hire, filters=groups))
     application.add_handler(CommandHandler("cancel", cancel, filters=groups))
+    application.add_handler(CommandHandler("stop", stop, filters=groups))
     application.add_handler(CommandHandler("help", help_, filters=groups))
     application.add_handler(CommandHandler("dashboard", dashboard, filters=groups))
     for kind in REPORTS:
@@ -375,7 +426,7 @@ def build_application(
         | filters.VIDEO_NOTE
     )
     application.add_handler(MessageHandler(files & groups, media))
-    application.add_handler(MessageHandler(filters.ChatType.PRIVATE, private))
+    application.add_handler(MessageHandler(filters.ChatType.PRIVATE & new, private))
     application.add_handler(CallbackQueryHandler(tap))
     application.add_error_handler(failed)
     return application, flows

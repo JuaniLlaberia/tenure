@@ -1,7 +1,7 @@
 from datetime import UTC, datetime
 
 import pytest
-from tests.app.fakes import NOW, Clock, FakeChat
+from tests.app.fakes import NOW, Clock, FakeBluesky, FakeChat
 from tests.app.test_flows import CHAT, REQUEST, marketing_team, say, tap
 
 from app.chat import ui
@@ -36,9 +36,12 @@ def store() -> InMemoryStore:
 def clock() -> Clock:
     return Clock()
 
+def tools_for(store, clock) -> RealTools:
+    return RealTools(bluesky=FakeBluesky(), files=Files(store, clock))
+
 @pytest.fixture
 def brain(store, clock) -> Recording:
-    return Recording(store=store, tools=RealTools(files=Files(store, clock)), clock=clock)
+    return Recording(store=store, tools=tools_for(store, clock), clock=clock)
 
 @pytest.fixture
 def chat() -> FakeChat:
@@ -61,7 +64,7 @@ async def test_one_image_draft_is_a_photo_with_the_card_as_caption(flows, chat):
     assert len(email.photos) == 1 and "1 image" in email.text
 
 async def test_two_or_more_images_go_in_an_album_above_the_card(chat, store, clock):
-    brain = Recording(store=store, tools=RealTools(files=Files(store, clock)), clock=clock)
+    brain = Recording(store=store, tools=tools_for(store, clock), clock=clock)
     flows = Flows(brain, chat, store=store, debounce=0.05, typing_every=60, clock=clock)
     thread_id = await marketing_team(flows, chat)
     chat.files.update({"t1": b"jpg1", "t2": b"jpg2"})
@@ -131,13 +134,25 @@ async def test_dashboard_decision_closes_a_telegram_edit(flows, chat, brain):
     assert ui.APPROVED_ON_DASHBOARD in chat.messages[menu.message_id].text
     assert flows._state.edits.get(approval_id) is None
 
-async def test_a_plain_post_edit_still_approves_in_one_step(chat, clock):
-    flows = Flows(FakeBrain(clock=clock), chat, debounce=0, typing_every=60, clock=clock)
+async def test_a_plain_post_edit_shows_your_version_before_posting(chat, clock):
+    store = InMemoryStore()
+    flows = Flows(
+        FakeBrain(store, clock=clock), chat, store=store, debounce=0, typing_every=60, clock=clock
+    )
     thread_id = await marketing_team(flows, chat)
     await say(flows, REQUEST, thread_id)
     post = [m for m in chat.thread(thread_id) if "Draft for approval" in m.text][-2]
     await tap(flows, post, "Edit")
     assert chat.last(thread_id).text.startswith("Send your version of the post")
+
+    await say(flows, "Doors open Friday at 6.", thread_id)
+
+    version = chat.last(thread_id)
+    assert "Your version" in version.text and "Doors open Friday at 6." in version.text
+    assert not [a for a in await store.list_actions(brain_business(flows))]
+    await tap(flows, version, "Approve my version")
+    (action,) = await store.list_actions(brain_business(flows))
+    assert action.tool == "post_social"
 
 async def test_schedule_card_runs_stops_and_turns_back_on(flows, chat, brain, store):
     thread_id = await marketing_team(flows, chat)
@@ -245,7 +260,7 @@ async def test_new_image_without_revisions_left_keeps_the_draft(flows, chat, bra
     assert brain.decisions == []
 
 async def test_founder_photos_get_no_new_image_button(chat, store, clock):
-    brain = Recording(store=store, tools=RealTools(files=Files(store, clock)), clock=clock)
+    brain = Recording(store=store, tools=tools_for(store, clock), clock=clock)
     flows = Flows(brain, chat, store=store, debounce=0.05, typing_every=60, clock=clock)
     thread_id = await marketing_team(flows, chat)
     chat.files["t1"] = b"jpg1"

@@ -45,6 +45,7 @@ COMMANDS = [
     ("dashboard", "Get the dashboard link and a new password"),
     ("dashboard_stop", "Turn the dashboard off"),
     ("cancel", "Stop an edit or a reason you started"),
+    ("stop", "Stop what the team in this topic is working on"),
     ("help", "What the bot can do"),
 ]
 

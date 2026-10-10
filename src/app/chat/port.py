@@ -21,6 +21,15 @@ class IncomingFile:
     name: str | None = None
     size: int | None = None
 
+class TopicGone(Exception):
+    """
+    Telegram no longer has the topic a message was sent to: the founder deleted it.
+    """
+
+    def __init__(self, thread_id: int | None) -> None:
+        super().__init__(f"Topic {thread_id} is gone")
+        self.thread_id = thread_id
+
 class Chat(Protocol):
     """
     What the flows need from Telegram. The real one wraps the bot; tests use a fake.
@@ -38,6 +47,7 @@ class Chat(Protocol):
     async def pin(self, chat_id: int, message_id: int) -> None: ...
     async def typing(self, chat_id: int, thread_id: int | None) -> None: ...
     async def download(self, telegram_id: str) -> bytes: ...
+    async def can_manage_topics(self, chat_id: int) -> bool: ...
     async def send_photo(
         self,
         chat_id: int,

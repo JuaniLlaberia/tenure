@@ -4,7 +4,7 @@ from uuid import uuid4
 import httpx
 import pytest
 from PIL import Image as PILImage
-from tests.app.fakes import NOW, Clock, FakeChat
+from tests.app.fakes import NOW, Clock, FakeBluesky, FakeChat
 from tests.app.test_dashboard import CHAT, open_dashboard, overview, say, setup
 
 from app.chat.flows import Flows
@@ -45,9 +45,12 @@ def store() -> InMemoryStore:
 def chat() -> FakeChat:
     return FakeChat()
 
+def tools_for(store, clock) -> RealTools:
+    return RealTools(bluesky=FakeBluesky(), files=Files(store, clock))
+
 @pytest.fixture
 def brain(store, clock) -> Recording:
-    return Recording(store, tools=RealTools(files=Files(store, clock)), clock=clock)
+    return Recording(store, tools=tools_for(store, clock), clock=clock)
 
 @pytest.fixture
 def flows(brain, chat, store, clock) -> Flows:

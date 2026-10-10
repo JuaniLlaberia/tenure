@@ -3,6 +3,7 @@ Turns Telegram input into Brain calls and renders the event streams back into th
 """
 
 import asyncio
+import contextlib
 import logging
 import re
 from collections import defaultdict
@@ -12,9 +13,10 @@ from datetime import UTC, datetime, timedelta
 from functools import partial
 from typing import Any, Literal
 from uuid import uuid4
+from zoneinfo import ZoneInfo
 
-from app.chat import reports, ui
-from app.chat.port import Chat, IncomingFile, Keyboard
+from app.chat import reports, ui, when
+from app.chat.port import Chat, IncomingFile, Keyboard, TopicGone
 from app.chat.state import (
     ActionCard,
     ApprovalCard,
@@ -28,6 +30,7 @@ from app.chat.state import (
     Pending,
     ReplaceCard,
     ScheduleCard,
+    Timed,
 )
 from app.files import MAX_DOWNLOAD, Files, avatar_bytes
 from app.scheduler import next_run
@@ -57,6 +60,7 @@ from contract import (
     Schedule,
     ScheduleSaved,
     SendEmail,
+    TaskStatus,
     Team,
     TeamHired,
     TemplateInfo,
@@ -76,6 +80,19 @@ DASHBOARD_FOOTERS = {
     "new_image": ui.NEW_IMAGE_ON_DASHBOARD,
 }
 REVISIONS_INCLUDED = 2
+PROMPT_TTL = timedelta(minutes=10)
+RUN_LIMIT = 15 * 60.0
+DEFAULT_TIMEZONE = "America/Los_Angeles"
+TIMED_OUT = {
+    "edit": ui.EDIT_TIMED_OUT,
+    "text": ui.EDIT_TIMED_OUT,
+    "subject": ui.EDIT_TIMED_OUT,
+    "to": ui.EDIT_TIMED_OUT,
+    "reason": ui.REASON_TIMED_OUT,
+    "image": ui.IMAGE_TIMED_OUT,
+    "time": ui.TIME_TIMED_OUT,
+}
+UNFINISHED = (TaskStatus.PLANNED, TaskStatus.IN_PROGRESS)
 
 Events = Callable[[], AsyncIterator[Event]]
 Tap = Callable[[int, int, str], Coroutine[Any, Any, str | None]]
@@ -108,9 +125,16 @@ class _View:
 
 @dataclass
 class _Run:
+    """
+    One brain stream being rendered. With `quiet`, Error events are kept in `errors` instead
+    of being sent, so the caller can show them in place (a failed action's card).
+    """
+
     chat_id: int
     thread_id: int | None
     status_threads: set[int | None] = field(default_factory=set)
+    quiet: bool = False
+    errors: list[str] = field(default_factory=list)
 
 class Flows:
     def __init__(
@@ -124,6 +148,7 @@ class Flows:
         clock: Callable[[], datetime] = _utcnow,
         dashboard_url: str = "http://localhost:8000",
         password_ttl: float = 600,
+        run_limit: float = RUN_LIMIT,
     ) -> None:
         self._brain = brain
         self._dashboard_url = dashboard_url.rstrip("/")
@@ -131,6 +156,10 @@ class Flows:
         self._hiring: set[tuple[str, str]] = set()
         self._asking: set[str] = set()
         self._running: set[str] = set()
+        self._queued: set[str] = set()
+        self._current: dict[str, asyncio.Task] = {}
+        self._stopping: set[str] = set()
+        self._run_limit = run_limit
         self._views: dict[tuple[int, int], _View] = {}
         self._password_ttl = password_ttl
         self._timers: set[asyncio.Task] = set()
@@ -174,6 +203,12 @@ class Flows:
             ui.TURN_ON: self._tap_turn_on,
             ui.REPLACE: self._tap_replace,
             ui.KEEP: self._tap_keep,
+            ui.PROMPT_CANCEL: self._tap_prompt_cancel,
+            ui.RETRY: self._tap_retry,
+            ui.SCHEDULE: self._tap_schedule,
+            ui.SCHEDULE_AT: self._tap_schedule_at,
+            ui.SEND_NOW: self._tap_send_now,
+            ui.UNSCHEDULE: self._tap_unschedule,
         }
 
     async def drain(self) -> None:
@@ -207,6 +242,9 @@ class Flows:
         if not is_forum:
             await self._chat.send(chat_id, thread_id, ui.NEEDS_TOPICS)
             return
+        if not await self._can_manage_topics(chat_id):
+            await self._chat.send(chat_id, thread_id, ui.NEEDS_ADMIN)
+            return
         business_id = self._state.businesses.get(chat_id)
         if business_id is None:
             business_id = await self._store.create_business(chat_id)
@@ -217,6 +255,12 @@ class Flows:
         business_id = await self._business(chat_id, thread_id)
         if business_id is None:
             return
+        if await self._store.get_profile(business_id) is None:
+            await self._chat.send(chat_id, thread_id, ui.SETUP_FIRST)
+            return
+        if name and self._template(name.strip().lower()) is None:
+            await self._send_hire_card(chat_id, thread_id, ui.unknown_team(name.strip()))
+            return
         if name:
             outcome = await self._request_hire(chat_id, thread_id, business_id, name)
             if outcome == "busy":
@@ -224,16 +268,55 @@ class Flows:
             return
         await self._send_hire_card(chat_id, thread_id, ui.PICK_TEAM)
 
+    async def _can_manage_topics(self, chat_id: int) -> bool:
+        try:
+            return await self._chat.can_manage_topics(chat_id)
+        except Exception:
+            logger.warning("Checking the bot's rights failed; going ahead", exc_info=True)
+            return True
+
     async def on_cancel(self, chat_id: int, thread_id: int | None) -> None:
-        pending = self._state.pending.pop((chat_id, thread_id), None)
-        card = self._state.approvals.get(pending.approval_id) if pending else None
-        if card is None:
-            await self._chat.send(chat_id, thread_id, ui.NOTHING_TO_CANCEL)
+        """
+        Ends the prompt open in this topic, or an edit menu nobody finished.
+        """
+        where = (chat_id, thread_id)
+        pending = self._state.pending.get(where)
+        if pending is not None:
+            await self._end_prompt(where, pending, None)
+            await self._chat.send(chat_id, thread_id, ui.CANCELLED)
             return
-        await self._drop_edit(card.approval_id, None)
-        self._state.handled.discard((card.chat_id, card.message_id))
-        await self._chat.edit(card.chat_id, card.message_id, card.text, card.keyboard)
-        await self._chat.send(chat_id, thread_id, ui.CANCELLED)
+        for approval_id in list(self._state.edits):
+            card = self._state.approvals.get(approval_id)
+            if card is not None and (card.chat_id, card.thread_id) == where:
+                await self._drop_edit(approval_id, ui.EDIT_UNDONE)
+                await self._reopen(card)
+                await self._chat.send(chat_id, thread_id, ui.CANCELLED)
+                return
+        await self._chat.send(chat_id, thread_id, ui.NOTHING_TO_CANCEL)
+
+    async def on_stop(self, chat_id: int, thread_id: int | None) -> None:
+        """
+        /stop: ends what the team in this topic (or Alex, in General) is working on.
+        """
+        business_id = await self._business(chat_id, thread_id)
+        if business_id is None:
+            return
+        team_id = self._state.topics.get((chat_id, thread_id)) if thread_id is not None else None
+        key = self._key(business_id, team_id)
+        current = self._current.get(key)
+        if current is None or current.done():
+            await self._chat.send(chat_id, thread_id, ui.NOTHING_RUNNING)
+            return
+        self._stopping.add(key)
+        current.cancel()
+        await self._chat.send(chat_id, thread_id, ui.stopped(await self._lead_name(team_id)))
+
+    async def _lead_name(self, team_id: str | None) -> str:
+        if team_id is None:
+            return "Alex"
+        team = await self._store.get_team(team_id)
+        info = self._template(team.template) if team else None
+        return info.personas[0].name if info and info.personas else "The team"
 
     async def on_report(self, chat_id: int, thread_id: int | None, kind: str) -> None:
         """
@@ -389,6 +472,8 @@ class Flows:
 
     async def hire_from_dashboard(self, business_id: str, template: str) -> None:
         chat_id = self._chat_for(business_id)
+        if await self._store.get_profile(business_id) is None:
+            raise Refused(ui.SETUP_FIRST)
         info = self._template(template)
         if info is None:
             raise Refused(f"There's no '{template}' team to hire.")
@@ -492,7 +577,8 @@ class Flows:
         """
         Approve, edit or reject a draft from the dashboard, as if done in Telegram. An approval
         or edit returns once it has gone out (or after DASHBOARD_WAIT), so the page reloads with
-        the result; a rejection returns at once, since a revision can take minutes.
+        the result, and raises Refused when it failed; a rejection returns at once, since a
+        revision can take minutes. A draft with a send time is held until then instead.
         """
         approval = await self._store.get_approval(approval_id)
         if approval is None or approval.business_id != business_id:
@@ -501,17 +587,17 @@ class Flows:
         prompts = [w for w, p in self._state.pending.items() if p.approval_id == approval_id]
         handled = card is not None and (card.chat_id, card.message_id) in self._state.handled
         busy = handled and not prompts and approval_id not in self._state.edits
+        timed = self._state.timed.get(approval_id)
+        if timed is not None and timed.decision is not None:
+            raise Refused("That draft is already approved and waiting for its send time.")
         if approval.status != "pending" or busy or approval_id in self._deciding:
             raise Refused("That draft is already being handled.")
         if decision == "new_image" and not await self.revisions_left(approval.task_id):
             raise Refused(ui.NO_REVISIONS_LEFT)
         chat_id = self._chat_for(business_id)
-        self._deciding.add(approval_id)
         for where in prompts:
             del self._state.pending[where]
         await self._drop_edit(approval_id, DASHBOARD_FOOTERS[decision])
-        if card is not None:
-            await self._close(card, DASHBOARD_FOOTERS[decision])
         resolution = ApprovalDecision(
             business_id=business_id,
             approval_id=approval_id,
@@ -520,9 +606,19 @@ class Flows:
             edited_text=edited_text,
             edited_action=edited_action,
         )
+        if decision in ("approve", "edit") and self._later(timed):
+            await self._hold(approval_id, timed, resolution, card)
+            return
+        self._deciding.add(approval_id)
+        self._state.timed.pop(approval_id, None)
+        if card is not None:
+            await self._close(card, DASHBOARD_FOOTERS[decision])
         task = self._track(self._decide_and_release(chat_id, approval.team_id, resolution))
-        if decision in ("approve", "edit"):
-            await asyncio.wait({task}, timeout=DASHBOARD_WAIT)
+        if decision not in ("approve", "edit"):
+            return
+        await asyncio.wait({task}, timeout=DASHBOARD_WAIT)
+        if task.done() and task.result():
+            raise Refused(ui.failed_on_dashboard(task.result()))
 
     @property
     def deciding(self) -> frozenset[str]:
@@ -551,14 +647,162 @@ class Flows:
 
     async def _decide_and_release(
         self, chat_id: int, team_id: str, decision: ApprovalDecision
-    ) -> None:
+    ) -> str | None:
         try:
-            thread_id = self._thread_for(team_id)
-            await self._call(
-                chat_id, team_id, thread_id, lambda: self._brain.resolve_approval(decision)
-            )
+            return await self._resolve(chat_id, team_id, decision)
         finally:
             self._deciding.discard(decision.approval_id)
+
+    async def _resolve(self, chat_id: int, team_id: str, decision: ApprovalDecision) -> str | None:
+        """
+        Sends a decision to the brain. Approvals and edits only run the action, so they skip
+        the team's queue. When the action fails the draft is still pending: its card comes
+        back with the reason and Try again. Returns that reason, or None.
+        """
+        for where, pending in list(self._state.pending.items()):
+            if pending.approval_id == decision.approval_id:
+                del self._state.pending[where]
+        acting = decision.decision in ("approve", "edit")
+        run = await self._call(
+            chat_id,
+            team_id,
+            self._thread_for(team_id),
+            lambda: self._brain.resolve_approval(decision),
+            queue=not acting,
+            quiet=acting,
+        )
+        if not acting:
+            return None
+        approval = await self._store.get_approval(decision.approval_id)
+        if approval is None or approval.status != "pending":
+            for message in run.errors:
+                await self._safe_send(chat_id, run.thread_id, ui.error_line(message))
+            return None
+        reason = run.errors[0] if run.errors else "That didn't go through"
+        card = self._state.approvals.get(decision.approval_id)
+        if card is not None:
+            card.retry = decision
+            self._state.approvals[card.approval_id] = card
+            self._state.handled.discard((card.chat_id, card.message_id))
+            keyboard = ui.failed_keyboard(card.approval_id, card.editable)
+            failed = ui.with_footer(card.text, ui.failed_footer(reason))
+            await self._safe_edit(card, failed, keyboard)
+        return reason
+
+    def _later(self, timed: Timed | None) -> bool:
+        return timed is not None and timed.send_at > self._clock()
+
+    async def _hold(
+        self,
+        approval_id: str,
+        timed: Timed,
+        decision: ApprovalDecision,
+        card: ApprovalCard | None,
+    ) -> None:
+        """
+        Approved, but the draft has a send time: the decision waits for it (see send_due).
+        """
+        timed.decision = decision
+        self._state.timed[approval_id] = timed
+        if card is not None:
+            footer = ui.scheduled_footer(timed.send_at, timed.timezone)
+            await self._close(card, footer, ui.scheduled_keyboard(approval_id))
+
+    async def _timezone(self, business_id: str) -> str:
+        profile = await self._store.get_profile(business_id)
+        zone = (profile.extra.get("timezone") if profile else None) or DEFAULT_TIMEZONE
+        try:
+            ZoneInfo(zone)
+        except Exception:
+            return DEFAULT_TIMEZONE
+        return zone
+
+    async def set_send_time(
+        self, business_id: str, approval_id: str, send_at: datetime | None
+    ) -> None:
+        """
+        Gives a draft a send time, changes it, or clears it (None), from Telegram or the
+        dashboard. Only drafts with an action can have one.
+        """
+        approval = await self._store.get_approval(approval_id)
+        if approval is None or approval.business_id != business_id:
+            raise Refused("I can't find that draft.")
+        if approval.status != "pending" or approval_id in self._deciding:
+            raise Refused("That draft is already being handled.")
+        if approval.planned_action is None:
+            raise Refused("This draft doesn't send anything, so it has no send time.")
+        timed = self._state.timed.get(approval_id)
+        if timed is not None and timed.decision is not None:
+            raise Refused("It's already approved for a time. Cancel the schedule first.")
+        if send_at is None:
+            self._state.timed.pop(approval_id, None)
+        else:
+            if send_at <= self._clock():
+                raise Refused(ui.PAST_TIME)
+            self._state.timed[approval_id] = Timed(
+                business_id=business_id,
+                team_id=approval.team_id,
+                task_id=approval.task_id,
+                send_at=send_at,
+                timezone=await self._timezone(business_id),
+            )
+        card = self._state.approvals.get(approval_id)
+        if card is not None:
+            await self._reopen(card)
+
+    async def send_now(self, business_id: str, approval_id: str) -> None:
+        """
+        Sends a draft that waits for its time (or still needs approval) right away.
+        """
+        timed = self._state.timed.get(approval_id)
+        if timed is None or timed.business_id != business_id:
+            raise Refused("That draft has no send time.")
+        if timed.decision is None:
+            self._state.timed.pop(approval_id)
+            await self.decide_from_dashboard(business_id, approval_id, "approve")
+            return
+        await self._send_held(approval_id, timed)
+
+    async def cancel_scheduled(self, business_id: str, approval_id: str) -> None:
+        """
+        Takes back an approval that waits for its send time; the draft waits for the founder.
+        """
+        timed = self._state.timed.get(approval_id)
+        if timed is None or timed.business_id != business_id or timed.decision is None:
+            raise Refused("That draft isn't scheduled.")
+        timed.decision = None
+        self._state.timed[approval_id] = timed
+        card = self._state.approvals.get(approval_id)
+        if card is not None:
+            await self._reopen(card)
+
+    async def tick(self) -> None:
+        """
+        Every minute (from the scheduler): ends forgotten prompts and sends held drafts.
+        """
+        await self.expire_prompts()
+        await self.send_due()
+
+    async def send_due(self) -> None:
+        for approval_id, timed in list(self._state.timed.items()):
+            if timed.decision is not None and timed.send_at <= self._clock():
+                await self._send_held(approval_id, timed)
+
+    async def _send_held(self, approval_id: str, timed: Timed) -> None:
+        self._state.timed.pop(approval_id, None)
+        decision = timed.decision
+        if decision is None or approval_id in self._deciding:
+            return
+        try:
+            chat_id = self._chat_for(timed.business_id)
+        except Refused:
+            logger.warning("A held draft's business has no group; dropping its send time")
+            return
+        card = self._state.approvals.get(approval_id)
+        if card is not None:
+            await self._close(card, ui.SENDING_NOW)
+        self._deciding.add(approval_id)
+        self._track(self._decide_and_release(chat_id, timed.team_id, decision))
 
     @property
     def running_schedules(self) -> frozenset[str]:
@@ -581,13 +825,24 @@ class Flows:
         return self._track(self._run_schedule(chat_id, schedule))
 
     async def _run_schedule(self, chat_id: int, schedule: Schedule) -> None:
-        self._running.add(schedule.schedule_id)
+        schedule_id = schedule.schedule_id
+        self._running.add(schedule_id)
+        if self._busy(schedule.business_id, schedule.team_id):
+            self._queued.add(schedule_id)
         await self._refresh_schedule(schedule)
+
+        async def started() -> None:
+            if schedule_id in self._queued:
+                self._queued.discard(schedule_id)
+                await self._refresh_schedule(schedule)
+
         try:
-            run = partial(self._brain.run_schedule, schedule.business_id, schedule.schedule_id)
-            await self._call(chat_id, schedule.team_id, self._thread_for(schedule.team_id), run)
+            run = partial(self._brain.run_schedule, schedule.business_id, schedule_id)
+            thread_id = self._thread_for(schedule.team_id)
+            await self._call(chat_id, schedule.team_id, thread_id, run, started=started)
         finally:
-            self._running.discard(schedule.schedule_id)
+            self._queued.discard(schedule_id)
+            self._running.discard(schedule_id)
             latest = await self._store.get_schedule(schedule.schedule_id)
             await self._refresh_schedule(latest or schedule)
 
@@ -658,8 +913,11 @@ class Flows:
             if lesson.lesson_id == lesson_id:
                 await self._store.save_lesson(lesson.model_copy(update={"active": False}))
                 found = True
-        card = self._state.lessons.pop(lesson_id, None)
+        card = self._state.lessons.get(lesson_id)
+        if card is not None and card.business_id != business_id:
+            card = None
         if card is not None:
+            self._state.lessons.pop(lesson_id)
             await self._close(card, ui.forgotten(card.persona))
         if not found and card is None:
             raise Refused("I can't find that lesson.")
@@ -671,8 +929,18 @@ class Flows:
         raise Refused("This business isn't linked to a Telegram group.")
 
     async def on_text(
-        self, chat_id: int, thread_id: int | None, text: str, message_id: int, sent_at: datetime
+        self,
+        chat_id: int,
+        thread_id: int | None,
+        text: str,
+        message_id: int,
+        sent_at: datetime,
+        reply_to: int | None = None,
     ) -> None:
+        """
+        A reply to a draft card is the reason to revise it; text while a prompt is open
+        answers it, unless the prompt is older than PROMPT_TTL.
+        """
         business_id = await self._business(chat_id, thread_id)
         if business_id is None:
             return
@@ -682,12 +950,43 @@ class Flows:
             if team_id is None:
                 await self._chat.send(chat_id, thread_id, ui.NOT_A_TEAM)
                 return
-        pending = self._state.pending.get((chat_id, thread_id))
+        pending = await self._live_prompt(chat_id, thread_id)
         if pending is not None:
             await self._answer_pending(chat_id, thread_id, pending, text)
             return
+        card = self._card_at(chat_id, reply_to) if reply_to is not None else None
+        if card is not None and text.strip():
+            await self._close(card, ui.revising(text))
+            self._decide(card, "reject", reason=text.strip())
+            return
         await self._close_asks(chat_id, thread_id)
         self._buffer(chat_id, thread_id, business_id, team_id, text, message_id, sent_at)
+
+    def _card_at(self, chat_id: int, message_id: int) -> ApprovalCard | None:
+        """
+        The open draft card that is this message, if any.
+        """
+        for card in self._state.approvals.values():
+            if card.chat_id == chat_id and card.message_id == message_id:
+                handled = (chat_id, message_id) in self._state.handled
+                return None if handled or card.approval_id in self._deciding else card
+        return None
+
+    async def _live_prompt(self, chat_id: int, thread_id: int | None) -> Pending | None:
+        where = (chat_id, thread_id)
+        pending = self._state.pending.get(where)
+        if pending is not None and self._expired(pending):
+            await self._end_prompt(where, pending, TIMED_OUT[pending.kind])
+            return None
+        return pending
+
+    def _expired(self, pending: Pending) -> bool:
+        return pending.since is not None and self._clock() - pending.since > PROMPT_TTL
+
+    async def expire_prompts(self) -> None:
+        for where, pending in list(self._state.pending.items()):
+            if self._expired(pending):
+                await self._end_prompt(where, pending, TIMED_OUT[pending.kind])
 
     async def on_file(
         self,
@@ -714,7 +1013,7 @@ class Flows:
         if file.size is not None and file.size > MAX_DOWNLOAD:
             await self._chat.send(chat_id, thread_id, ui.too_big(file.size, MAX_DOWNLOAD))
             return
-        if (chat_id, thread_id) in self._state.pending:
+        if await self._live_prompt(chat_id, thread_id) is not None:
             await self._chat.send(chat_id, thread_id, ui.FILE_DURING_EDIT)
             return
         await self._close_asks(chat_id, thread_id)
@@ -802,7 +1101,9 @@ class Flows:
             sent_at=buffer.sent_at,
             attachments=buffer.files,
         )
-        await self._call(chat_id, team_id, thread_id, lambda: self._brain.handle_message(message))
+        notice = ui.queued(await self._lead_name(team_id))
+        handle = partial(self._brain.handle_message, message)
+        await self._call(chat_id, team_id, thread_id, handle, notice=notice)
 
     def _key(self, business_id: str, team_id: str | None) -> str:
         return f"{business_id}:{team_id or 'company'}"
@@ -818,29 +1119,107 @@ class Flows:
     ) -> asyncio.Task:
         return self._track(self._call(chat_id, team_id, thread_id, events))
 
+    def _busy(self, business_id: str, team_id: str | None) -> bool:
+        return self._locks[self._key(business_id, team_id)].locked()
+
     async def _call(
-        self, chat_id: int, team_id: str | None, thread_id: int | None, events: Events
-    ) -> None:
+        self,
+        chat_id: int,
+        team_id: str | None,
+        thread_id: int | None,
+        events: Events,
+        queue: bool = True,
+        quiet: bool = False,
+        notice: str | None = None,
+        started: Callable[[], Coroutine[Any, Any, None]] | None = None,
+    ) -> _Run:
+        """
+        Renders one brain stream, one at a time per team (`queue`). A message that has to
+        wait gets a "Queued" `notice`. A run is cut off after the run limit, or by /stop.
+        """
         business_id = self._state.businesses[chat_id]
-        run = _Run(chat_id, thread_id)
-        async with self._locks[self._key(business_id, team_id)]:
+        run = _Run(chat_id, thread_id, quiet=quiet)
+        key = self._key(business_id, team_id)
+        lock = self._locks[key] if queue else contextlib.nullcontext()
+        waiting = None
+        if queue and notice and self._locks[key].locked():
+            waiting = await self._try_send(chat_id, thread_id, notice)
+        async with lock:
+            if waiting is not None:
+                await self._try_delete(chat_id, waiting)
+            if started is not None:
+                await started()
             typing = await self._start_typing(chat_id, thread_id)
+            consume = asyncio.create_task(self._consume(run, events))
+            if queue:
+                self._current[key] = consume
             failed = False
             try:
-                async for event in events():
-                    try:
-                        await self._render(run, event)
-                    except Exception:
-                        logger.exception("Rendering %s failed", event.type)
-                        failed = True
-            except Exception:
-                logger.exception("Brain call failed")
-                failed = True
+                async with asyncio.timeout(self._run_limit):
+                    failed = await asyncio.shield(consume)
+            except TimeoutError:
+                consume.cancel()
+                await asyncio.gather(consume, return_exceptions=True)
+                await self._fail_unfinished(business_id, team_id)
+                await self._safe_send(chat_id, thread_id, ui.TOO_LONG_RUN)
+            except asyncio.CancelledError:
+                if key not in self._stopping:
+                    consume.cancel()
+                    raise
+                await self._fail_unfinished(business_id, team_id)
             finally:
+                self._stopping.discard(key)
+                if self._current.get(key) is consume:
+                    del self._current[key]
                 typing.cancel()
                 await self._clear_status(run)
             if failed:
                 await self._safe_send(chat_id, thread_id, ui.BROKEN)
+        return run
+
+    async def _consume(self, run: _Run, events: Events) -> bool:
+        """
+        Renders every event; returns whether something broke.
+        """
+        failed = False
+        try:
+            async for event in events():
+                try:
+                    await self._render(run, event)
+                except Exception:
+                    logger.exception("Rendering %s failed", event.type)
+                    failed = True
+        except Exception:
+            logger.exception("Brain call failed")
+            failed = True
+        return failed
+
+    async def _fail_unfinished(self, business_id: str, team_id: str | None) -> None:
+        """
+        A stopped run leaves its tasks unfinished in the store; they are marked failed.
+        """
+        if team_id is None:
+            return
+        try:
+            for task in await self._store.list_tasks(business_id):
+                if task.team_id == team_id and task.status in UNFINISHED:
+                    update = {"status": TaskStatus.FAILED, "updated_at": self._clock()}
+                    await self._store.save_task(task.model_copy(update=update))
+        except Exception:
+            logger.exception("Marking stopped tasks failed")
+
+    async def _try_send(self, chat_id: int, thread_id: int | None, text: str) -> int | None:
+        try:
+            return await self._chat.send(chat_id, thread_id, text)
+        except Exception:
+            logger.debug("Sending a notice failed", exc_info=True)
+            return None
+
+    async def _try_delete(self, chat_id: int, message_id: int) -> None:
+        try:
+            await self._chat.delete(chat_id, message_id)
+        except Exception:
+            logger.debug("Deleting a notice failed", exc_info=True)
 
     async def _keep_typing(self, chat_id: int, thread_id: int | None) -> None:
         while True:
@@ -876,6 +1255,40 @@ class Flows:
         return self._state.team_threads.get(team_id)
 
     async def _render(self, run: _Run, event: Event) -> None:
+        """
+        Renders one event. When its team's topic was deleted, the topic is opened again and
+        the event rendered there.
+        """
+        try:
+            await self._render_event(run, event)
+        except TopicGone as gone:
+            if not await self._reopen_topic(run.chat_id, gone.thread_id):
+                raise
+            await self._render_event(run, event)
+
+    async def _reopen_topic(self, chat_id: int, thread_id: int | None) -> bool:
+        team_id = self._state.topics.pop((chat_id, thread_id), None) if thread_id else None
+        team = await self._store.get_team(team_id) if team_id else None
+        if team is None:
+            return False
+        icon = ui.TOPIC_ICONS.get(team.template)
+        name = self._state.team_names.get(team.team_id, team.display_name)
+        new_thread = await self._chat.create_topic(chat_id, name, icon)
+        self._state.add_team(chat_id, new_thread, team.team_id, name)
+        self._state.pending.pop((chat_id, thread_id), None)
+        self._state.status.pop((chat_id, thread_id), None)
+        topic = TelegramTopic(
+            team_id=team.team_id,
+            business_id=team.business_id,
+            chat_id=chat_id,
+            thread_id=new_thread,
+            name=name,
+        )
+        await self._store.save_topic(topic)
+        await self._safe_send(chat_id, None, ui.topic_reopened(icon, name))
+        return True
+
+    async def _render_event(self, run: _Run, event: Event) -> None:
         chat_id = run.chat_id
         business_id = self._state.businesses[chat_id]
         match event:
@@ -906,8 +1319,12 @@ class Flows:
                 if event.scope == "business":
                     await self._send_hire_card(chat_id, None, ui.SETUP_DONE)
             case Error():
+                if run.quiet:
+                    run.errors.append(event.message)
+                    return
                 thread_id = self._thread_for(event.team_id) if event.team_id else run.thread_id
-                await self._chat.send(chat_id, thread_id, ui.error_text(event))
+                for part in ui.split_text(ui.error_text(event)):
+                    await self._chat.send(chat_id, thread_id, part)
 
     async def _show_status(self, run: _Run, thread_id: int | None, text: str) -> None:
         run.status_threads.add(thread_id)
@@ -950,16 +1367,19 @@ class Flows:
         text: str,
         keyboard: Keyboard | None = None,
         text_above: Callable[[bool], str] | None = None,
+        footer: str | None = None,
     ) -> tuple[int, str]:
         """
         One image with a short text: a photo with the text as its caption. Otherwise the
-        images first (one photo, or an album: albums can't carry buttons), then the text.
-        Returns the message that has the text and buttons, and its text. `text_above`
-        rewrites the text for when the images are in the message above.
+        images first (one photo, or an album: albums can't carry buttons), then the text,
+        split when Telegram's limit needs it. Returns the message that has the buttons, and
+        its text without `footer`. `text_above` rewrites the text for when the images are in
+        the message above.
         """
         photos = await self._image_bytes(business_id, images)
-        if len(photos) == 1 and len(text) <= ui.CAPTION_LIMIT:
-            sent = await self._chat.send_photo(chat_id, thread_id, photos[0], text, keyboard)
+        shown = ui.with_footer(text, footer)
+        if len(photos) == 1 and len(shown) <= ui.CAPTION_LIMIT:
+            sent = await self._chat.send_photo(chat_id, thread_id, photos[0], shown, keyboard)
             return sent, text
         if len(photos) == 1:
             await self._chat.send_photo(chat_id, thread_id, photos[0])
@@ -967,22 +1387,57 @@ class Flows:
             await self._chat.send_album(chat_id, thread_id, photos)
         if photos and text_above is not None:
             text = text_above(True)
-        return await self._chat.send(chat_id, thread_id, text, keyboard), text
+        *first, last = ui.split_text(ui.with_footer(text, footer))
+        for part in first:
+            await self._chat.send(chat_id, thread_id, part)
+        return await self._chat.send(chat_id, thread_id, last, keyboard), text
 
     async def _render_approval(self, chat_id: int, business_id: str, event: NeedsApproval) -> None:
+        """
+        A new draft. An earlier open card of the same task is closed (the team revised it), and
+        its send time carries over unless the brain gave one.
+        """
         thread_id = self._thread_for(event.team_id)
+        carried = await self._supersede(event.task_id)
+        timed = None
+        send_at = event.send_at or (carried.send_at if carried else None)
+        if event.planned_action is not None and send_at is not None and send_at > self._clock():
+            timed = Timed(
+                business_id=business_id,
+                team_id=event.team_id,
+                task_id=event.task_id,
+                send_at=send_at,
+                timezone=await self._timezone(business_id),
+            )
+            self._state.timed[event.approval_id] = timed
         images = ui.draft_images(event)
         editable = event.planned_action is not None or not event.media
-        keyboard = ui.approval_keyboard(event.approval_id, editable, ui.made_images(event))
+        new_image = ui.made_images(event)
+        timing = None if event.planned_action is None else ("timed" if timed else "none")
+        keyboard = ui.approval_keyboard(event.approval_id, editable, new_image, timing)
+        footer = ui.goes_out(timed.send_at, timed.timezone) if timed else None
         above = partial(ui.approval_text, event)
         message_id, text = await self._send_with_images(
-            chat_id, thread_id, business_id, images, above(False), keyboard, above
+            chat_id, thread_id, business_id, images, above(False), keyboard, above, footer
         )
         self._state.approvals[event.approval_id] = ApprovalCard(
             chat_id, thread_id, message_id, text, keyboard,
             business_id=business_id, team_id=event.team_id, approval_id=event.approval_id,
             persona=event.persona, action=event.planned_action, task_id=event.task_id,
+            editable=editable, new_image=new_image,
         )
+
+    async def _supersede(self, task_id: str) -> Timed | None:
+        carried = None
+        for approval_id, card in list(self._state.approvals.items()):
+            if card.task_id != task_id:
+                continue
+            timed = self._state.timed.pop(approval_id, None)
+            if timed is not None and timed.decision is None:
+                carried = timed
+            if (card.chat_id, card.message_id) not in self._state.handled:
+                await self._close(card, ui.REVISED_BELOW)
+        return carried
 
     async def _render_action(self, chat_id: int, business_id: str, event: ActionDone) -> None:
         thread_id = self._thread_for(event.team_id)
@@ -1052,8 +1507,9 @@ class Flows:
         if card is None:
             return
         running = schedule.schedule_id in self._running
+        queued = schedule.schedule_id in self._queued
         card.schedule = schedule
-        card.text = ui.schedule_text(card.persona, schedule, running)
+        card.text = ui.schedule_text(card.persona, schedule, running, queued)
         card.keyboard = ui.schedule_keyboard(schedule, running)
         self._state.schedules[schedule.schedule_id] = card
         try:
@@ -1107,11 +1563,41 @@ class Flows:
     async def _close(
         self, card: Card, footer: str | None, keyboard: Keyboard | None = None
     ) -> None:
+        """
+        Edits a card to show what happened; without a keyboard its buttons are gone for good.
+        A card Telegram can't edit any more (the founder deleted it) doesn't stop anything.
+        """
         if keyboard is None:
             self._state.handled.add((card.chat_id, card.message_id))
-        await self._chat.edit(
-            card.chat_id, card.message_id, ui.with_footer(card.text, footer), keyboard
-        )
+        await self._safe_edit(card, ui.with_footer(card.text, footer), keyboard)
+
+    async def _safe_edit(self, card: Card, text: str, keyboard: Keyboard | None) -> None:
+        try:
+            await self._chat.edit(card.chat_id, card.message_id, text, keyboard)
+        except Exception:
+            logger.warning("Updating a card failed", exc_info=True)
+
+    def _view(self, card: ApprovalCard, footer: str | None = None) -> tuple[str, Keyboard]:
+        """
+        A draft card as it is now: its send time, if any, and the buttons that fit.
+        """
+        timed = self._state.timed.get(card.approval_id)
+        if card.action is None:
+            timing = None
+        else:
+            timing = "timed" if timed is not None else "none"
+        keyboard = ui.approval_keyboard(card.approval_id, card.editable, card.new_image, timing)
+        lines = [ui.goes_out(timed.send_at, timed.timezone)] if timed else []
+        if footer:
+            lines.append(footer)
+        return ui.with_footer(card.text, "\n".join(lines) or None), keyboard
+
+    async def _reopen(self, card: ApprovalCard, footer: str | None = None) -> None:
+        """
+        Puts a draft card back to waiting for the founder, with its buttons.
+        """
+        self._state.handled.discard((card.chat_id, card.message_id))
+        await self._safe_edit(card, *self._view(card, footer))
 
     async def _close_asks(self, chat_id: int, thread_id: int | None) -> None:
         for key, card in list(self._state.asks.items()):
@@ -1120,19 +1606,7 @@ class Flows:
                 await self._close(card, None)
 
     def _decide_edit(self, card: ApprovalCard, edited_text: str, action: PlannedAction) -> None:
-        resolution = ApprovalDecision(
-            business_id=card.business_id,
-            approval_id=card.approval_id,
-            decision="edit",
-            edited_text=edited_text,
-            edited_action=action,
-        )
-        self._spawn(
-            card.chat_id,
-            card.team_id,
-            card.thread_id,
-            lambda: self._brain.resolve_approval(resolution),
-        )
+        self._send_decision(card, self._resolution(card, "edit", edited_text, action))
 
     def _decide(self, card: ApprovalCard, decision: str, **fields: str) -> None:
         resolution = ApprovalDecision(
@@ -1141,35 +1615,132 @@ class Flows:
             decision=decision,
             **fields,
         )
-        self._spawn(
-            card.chat_id,
-            card.team_id,
-            card.thread_id,
-            lambda: self._brain.resolve_approval(resolution),
+        self._send_decision(card, resolution)
+
+    def _resolution(
+        self,
+        card: ApprovalCard,
+        decision: str,
+        edited_text: str | None = None,
+        action: PlannedAction | None = None,
+    ) -> ApprovalDecision:
+        return ApprovalDecision(
+            business_id=card.business_id,
+            approval_id=card.approval_id,
+            decision=decision,
+            edited_text=edited_text,
+            edited_action=action,
         )
+
+    def _send_decision(self, card: ApprovalCard, resolution: ApprovalDecision) -> None:
+        self._state.timed.pop(card.approval_id, None)
+        self._track(self._resolve(card.chat_id, card.team_id, resolution))
+
+    async def _approve(
+        self, card: ApprovalCard, resolution: ApprovalDecision, footer: str
+    ) -> None:
+        """
+        Approves (or approves the founder's version) now, or holds it for the draft's send
+        time.
+        """
+        timed = self._state.timed.get(card.approval_id)
+        if self._later(timed):
+            await self._hold(card.approval_id, timed, resolution, card)
+            return
+        await self._close(card, footer)
+        self._send_decision(card, resolution)
+
+    async def _set_pending(self, card: ApprovalCard, kind: str) -> None:
+        """
+        One prompt per topic: starting one puts an earlier draft's prompt away first.
+        """
+        where = (card.chat_id, card.thread_id)
+        old = self._state.pending.get(where)
+        if old is not None and old.approval_id != card.approval_id:
+            await self._end_prompt(where, old, None)
+        self._state.pending[where] = Pending(kind, card.approval_id, self._clock())
+
+    async def _prompt(self, card: ApprovalCard, kind: str, footer: str, text: str) -> None:
+        await self._set_pending(card, kind)
+        await self._close(card, footer, ui.prompt_cancel_keyboard(card.approval_id))
+        await self._chat.send(card.chat_id, card.thread_id, text)
+
+    async def _end_prompt(
+        self, where: tuple[int, int | None], pending: Pending, footer: str | None
+    ) -> None:
+        """
+        Closes a prompt (cancelled, timed out or replaced); its draft waits again.
+        """
+        self._state.pending.pop(where, None)
+        card = self._state.approvals.get(pending.approval_id)
+        if card is None:
+            return
+        if pending.kind in ("text", "subject", "to"):
+            await self._drop_edit(pending.approval_id, footer or ui.EDIT_UNDONE)
+        await self._reopen(card, footer)
 
     async def _answer_pending(
         self, chat_id: int, thread_id: int | None, pending: Pending, text: str
     ) -> None:
-        card = self._state.approvals[pending.approval_id]
+        card = self._state.approvals.get(pending.approval_id)
+        if card is None:
+            del self._state.pending[(chat_id, thread_id)]
+            await self._chat.send(chat_id, thread_id, ui.GONE)
+            return
+        if pending.kind == "time":
+            await self._answer_time(chat_id, thread_id, card, text)
+            return
         if pending.kind in ("text", "subject", "to"):
             await self._answer_field(chat_id, thread_id, card, pending, text)
             return
         if pending.kind == "edit":
-            if isinstance(card.action, PostSocial) and len(text) > ui.POST_LIMIT:
-                await self._chat.send(chat_id, thread_id, ui.too_long(len(text)))
-                return
-            del self._state.pending[(chat_id, thread_id)]
-            await self._close(card, ui.EDITED)
-            self._decide(card, "edit", edited_text=text)
+            await self._answer_edit(chat_id, thread_id, card, text)
             return
         del self._state.pending[(chat_id, thread_id)]
         if pending.kind == "image":
             await self._close(card, f"{ui.NEW_IMAGE_REQUESTED}: {text}")
             self._decide(card, "new_image", reason=text)
             return
-        await self._close(card, ui.REJECTED)
+        busy = self._busy(card.business_id, card.team_id)
+        await self._close(card, ui.rejected_queued(card.persona.name) if busy else ui.REJECTED)
         self._decide(card, "reject", reason=text)
+
+    async def _answer_edit(
+        self, chat_id: int, thread_id: int | None, card: ApprovalCard, text: str
+    ) -> None:
+        """
+        A post's new text becomes "Your version" to approve; nothing goes out yet. A draft
+        without an action takes the edit at once, since nothing gets sent.
+        """
+        if isinstance(card.action, PostSocial) and len(text) > ui.POST_LIMIT:
+            await self._chat.send(chat_id, thread_id, ui.too_long(len(text)))
+            return
+        del self._state.pending[(chat_id, thread_id)]
+        if isinstance(card.action, PostSocial):
+            action = card.action.model_copy(update={"text": text})
+            draft = EditDraft(card.approval_id, action, card.action, ["text changed"])
+            await self._close(card, ui.EDITING_BELOW)
+            await self._show_edit(card, draft, menu=False)
+            return
+        await self._approve(card, self._resolution(card, "edit", text), ui.EDITED)
+
+    async def _answer_time(
+        self, chat_id: int, thread_id: int | None, card: ApprovalCard, text: str
+    ) -> None:
+        timezone = await self._timezone(card.business_id)
+        moment = when.parse(text, self._clock(), timezone)
+        if moment is None:
+            await self._chat.send(chat_id, thread_id, ui.BAD_TIME)
+            return
+        if moment <= self._clock():
+            await self._chat.send(chat_id, thread_id, ui.PAST_TIME)
+            return
+        del self._state.pending[(chat_id, thread_id)]
+        try:
+            await self.set_send_time(card.business_id, card.approval_id, moment)
+        except Refused as refused:
+            await self._chat.send(chat_id, thread_id, str(refused))
+            await self._reopen(card)
 
     async def revisions_left(self, task_id: str | None) -> bool:
         task = await self._store.get_task(task_id) if task_id else None
@@ -1190,9 +1761,7 @@ class Flows:
         card = self._state.approvals.get(approval_id)
         if card is None:
             return ui.GONE
-        await self._close(card, ui.NEW_IMAGE_WAITING)
-        self._state.pending[(card.chat_id, card.thread_id)] = Pending("image", approval_id)
-        await self._chat.send(card.chat_id, card.thread_id, ui.IMAGE_REASON_PROMPT)
+        await self._prompt(card, "image", ui.NEW_IMAGE_WAITING, ui.IMAGE_REASON_PROMPT)
         return None
 
     async def _tap_image_again(
@@ -1209,8 +1778,7 @@ class Flows:
         card = self._state.approvals.get(approval_id)
         if card is None:
             return ui.GONE
-        await self._close(card, ui.APPROVED)
-        self._decide(card, "approve")
+        await self._approve(card, self._resolution(card, "approve"), ui.APPROVED)
         return None
 
     async def _tap_edit(self, chat_id: int, message_id: int, approval_id: str) -> str | None:
@@ -1222,9 +1790,7 @@ class Flows:
             draft = EditDraft(approval_id, card.action, card.action, [])
             await self._show_edit(card, draft, menu=True)
             return None
-        await self._close(card, ui.EDITING)
-        self._state.pending[(card.chat_id, card.thread_id)] = Pending("edit", approval_id)
-        await self._chat.send(card.chat_id, card.thread_id, ui.edit_prompt(card.action))
+        await self._prompt(card, "edit", ui.EDITING, ui.edit_prompt(card.action))
         return None
 
     async def _show_edit(self, card: ApprovalCard, draft: EditDraft, menu: bool) -> None:
@@ -1273,7 +1839,7 @@ class Flows:
             draft.changes.append(f"image {number} removed")
             await self._show_edit(card, draft, menu=False)
             return None
-        self._state.pending[(card.chat_id, card.thread_id)] = Pending(field, approval_id)
+        await self._set_pending(card, field)
         await self._chat.send(card.chat_id, card.thread_id, ui.field_prompt(field, draft.action))
         return None
 
@@ -1319,8 +1885,7 @@ class Flows:
         card, _ = parts
         self._state.pending.pop((card.chat_id, card.thread_id), None)
         await self._drop_edit(approval_id, ui.EDIT_UNDONE)
-        self._state.handled.discard((card.chat_id, card.message_id))
-        await self._chat.edit(card.chat_id, card.message_id, card.text, card.keyboard)
+        await self._reopen(card)
         return None
 
     async def _tap_edit_approve(
@@ -1334,10 +1899,9 @@ class Flows:
             return "Change something first, or approve the draft as it is."
         self._state.pending.pop((card.chat_id, card.thread_id), None)
         await self._drop_edit(approval_id, ui.APPROVED_YOURS)
-        await self._close(card, ui.EDITED)
         action = draft.action
         edited_text = action.text if isinstance(action, PostSocial) else action.body
-        self._decide_edit(card, edited_text, action)
+        await self._approve(card, self._resolution(card, "edit", edited_text, action), ui.EDITED)
         return None
 
     async def _tap_reject(self, chat_id: int, message_id: int, approval_id: str) -> str | None:
@@ -1351,9 +1915,7 @@ class Flows:
         card = self._state.approvals.get(approval_id)
         if card is None:
             return ui.GONE
-        await self._close(card, ui.REJECTING)
-        self._state.pending[(card.chat_id, card.thread_id)] = Pending("reason", approval_id)
-        await self._chat.send(card.chat_id, card.thread_id, ui.reason_prompt(card.persona))
+        await self._prompt(card, "reason", ui.REJECTING, ui.reason_prompt(card.persona))
         return None
 
     async def _tap_drop(self, chat_id: int, message_id: int, approval_id: str) -> str | None:
@@ -1363,6 +1925,76 @@ class Flows:
         await self._close(card, ui.REJECTED)
         self._decide(card, "reject")
         return None
+
+    async def _tap_prompt_cancel(
+        self, chat_id: int, message_id: int, approval_id: str
+    ) -> str | None:
+        for where, pending in list(self._state.pending.items()):
+            if pending.approval_id == approval_id:
+                await self._end_prompt(where, pending, None)
+                return ui.CANCELLED
+        card = self._state.approvals.get(approval_id)
+        if card is None:
+            return ui.GONE
+        await self._reopen(card)
+        return None
+
+    async def _tap_retry(self, chat_id: int, message_id: int, approval_id: str) -> str | None:
+        card = self._state.approvals.get(approval_id)
+        if card is None:
+            return ui.GONE
+        resolution = card.retry or self._resolution(card, "approve")
+        card.retry = None
+        self._state.approvals[approval_id] = card
+        footer = ui.EDITED if resolution.decision == "edit" else ui.APPROVED
+        await self._approve(card, resolution, footer)
+        return None
+
+    async def _tap_schedule(self, chat_id: int, message_id: int, approval_id: str) -> str | None:
+        card = self._state.approvals.get(approval_id)
+        if card is None or card.action is None:
+            return ui.GONE
+        timezone = await self._timezone(card.business_id)
+        await self._close(card, ui.when_prompt(timezone), ui.when_keyboard(approval_id))
+        return None
+
+    async def _tap_schedule_at(self, chat_id: int, message_id: int, arg: str) -> str | None:
+        approval_id, _, key = arg.partition(":")
+        card = self._state.approvals.get(approval_id)
+        if card is None:
+            return ui.GONE
+        if key == "cancel":
+            await self._reopen(card)
+            return None
+        timezone = await self._timezone(card.business_id)
+        if key == "other":
+            await self._prompt(card, "time", ui.when_prompt(timezone), ui.OTHER_TIME_PROMPT)
+            return None
+        moment = when.preset(key, self._clock(), timezone)
+        if moment is None:
+            return ui.GONE
+        try:
+            await self.set_send_time(card.business_id, approval_id, moment)
+        except Refused as refused:
+            await self._reopen(card)
+            return str(refused)
+        return None
+
+    async def _tap_send_now(self, chat_id: int, message_id: int, approval_id: str) -> str | None:
+        card = self._state.approvals.get(approval_id)
+        timed = self._state.timed.get(approval_id)
+        if card is None or timed is None:
+            return ui.GONE
+        if timed.decision is not None:
+            await self._send_held(approval_id, timed)
+            return None
+        self._state.timed.pop(approval_id)
+        await self._approve(card, self._resolution(card, "approve"), ui.APPROVED)
+        return None
+
+    async def _tap_unschedule(self, chat_id: int, message_id: int, approval_id: str) -> str | None:
+        toast = await self._business_tap(chat_id, message_id, self.cancel_scheduled, approval_id)
+        return toast or ui.SCHEDULE_CANCELLED
 
     async def _tap_undo(self, chat_id: int, message_id: int, action_id: str) -> str | None:
         card = self._state.actions.get(action_id)
@@ -1410,6 +2042,9 @@ class Flows:
             return ui.GONE
         info = self._template(template)
         business_id = self._state.businesses[chat_id]
+        if await self._store.get_profile(business_id) is None:
+            self._state.hire_cards[(chat_id, message_id)] = card
+            return ui.SETUP_FIRST
         outcome = await self._request_hire(chat_id, card.thread_id, business_id, template)
         if outcome == "busy":
             self._state.hire_cards[(chat_id, message_id)] = card

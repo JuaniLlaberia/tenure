@@ -1,6 +1,7 @@
 """
 Runs due schedules: every minute it finds schedules whose next run has come, starts them
-through Flows (the team's queue), and moves next_run_at to the next occurrence.
+through Flows (the team's queue), and moves next_run_at to the next occurrence. The same tick
+lets Flows end forgotten prompts and send drafts held for their send time.
 """
 
 import asyncio
@@ -65,6 +66,10 @@ class Scheduler:
                 await self.run_due()
             except Exception:
                 logger.exception("Checking schedules failed")
+            try:
+                await self._flows.tick()
+            except Exception:
+                logger.exception("Checking prompts and send times failed")
             await asyncio.sleep(self._tick)
 
     async def run_due(self) -> None:
