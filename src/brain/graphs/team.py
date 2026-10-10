@@ -12,7 +12,7 @@ from pydantic import BaseModel, ValidationError
 
 from brain.check import run_check
 from brain.common import new_id
-from brain.context import build_context
+from brain.context import build_context, lessons_section
 from brain.deps import Deps
 from brain.flows.actions import execute_action
 from brain.flows.approvals import MAX_CHECKS
@@ -26,6 +26,7 @@ from brain.prompts.lead import (
     IS_CLEAR,
     NAMES_CHANNELS,
     STOPS_SCHEDULE,
+    WANTS_NO_IMAGE,
     WANTS_SCHEDULE,
     WEEKDAYS,
     LeadPlan,
@@ -655,6 +656,10 @@ def build_team_graph(
         teams = await deps.store.list_teams(state["business_id"])
         ready = {team.template for team in teams if team.onboarded}
         hired = {team.template for team in teams}
+        no_images, image_tokens = await wants_no_image(state, plans, ready)
+        tokens += image_tokens
+        if no_images:
+            ready = set()
         for item in plans:
             task = Task(
                 task_id=new_id(),
@@ -693,6 +698,23 @@ def build_team_graph(
             "schedule_history": runs_after(state, [p.title for p in plans]),
             "tokens_used": tokens,
         }
+
+    async def wants_no_image(
+        state: TeamState, plans: list[TaskPlan], ready: set[str]
+    ) -> tuple[bool, int]:
+        """
+        Whether this request skips other teams' steps (the Design team's image) because the
+        request or the team's lessons say no images. Only asked when a planned task would get
+        such a step.
+        """
+        template = template_of(state)
+        if not any(set(template.task_types[item.task_type].with_teams) & ready for item in plans):
+            return False, 0
+        lessons = await deps.store.list_lessons(state["business_id"], state["team_id"])
+        known = lessons_section(lessons)
+        text = f"Request:\n{state['request']}" + (f"\n\n{known}" if known else "")
+        decisions = await decide(deps, {"wants_no_image": WANTS_NO_IMAGE}, text)
+        return decisions["wants_no_image"].accepts("yes", threshold), decisions.tokens
 
     def after_plan(state: TeamState) -> str:
         return "clarify" if state.get("plan_question") else "dispatch"

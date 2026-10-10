@@ -32,6 +32,13 @@ NAMES_CHANNELS = Question.yes_no(
     no="No: it asks for a campaign or promotion without saying where",
 )
 
+WANTS_NO_IMAGE = Question.yes_no(
+    "Does the founder's request, or what the team knows about them, say this work should go "
+    "out without images, pictures or visuals?",
+    yes="Yes: no images for this",
+    no="No: images are fine, or images aren't mentioned",
+)
+
 class ScheduleDraft(BaseModel):
     """
     A schedule as the model read it. Anything not said is null; code fills the defaults.

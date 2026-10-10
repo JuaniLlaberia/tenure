@@ -137,6 +137,50 @@ async def test_with_design_the_post_gets_an_illustrator_step(
     assert task.steps == ["writer", "design:illustrator"]
     assert task.current_step == 2
 
+async def test_no_images_in_the_request_skips_the_illustrator(
+    brain, collect, deps, jev, campaign, images, marketing, design, message
+):
+    campaign()
+    jev.answers["wants_no_image"] = lambda state: 0.9 if "no images" in state else 0.1
+
+    (needs,), _ = await draft(brain, collect, message, marketing, "Post about Friday, no images")
+
+    task = await deps.store.get_task(needs.task_id)
+    assert task.steps == ["writer"]
+    assert needs.planned_action.images == []
+    assert images.calls == []
+
+async def test_a_no_images_lesson_on_marketing_is_respected(
+    brain, collect, deps, jev, campaign, images, marketing, design, message
+):
+    campaign()
+    jev.answers["wants_no_image"] = lambda state: 0.9 if "Never add images" in state else 0.1
+    await deps.store.save_lesson(
+        Lesson(
+            lesson_id="l-no-images",
+            business_id="b1",
+            team_id=marketing.team_id,
+            kind="preference",
+            text="Never add images to posts",
+            source="chat",
+            created_at=NOW,
+        )
+    )
+
+    (needs,), _ = await draft(brain, collect, message, marketing)
+
+    assert (await deps.store.get_task(needs.task_id)).steps == ["writer"]
+    assert images.calls == []
+
+async def test_without_design_the_no_images_question_is_not_asked(
+    brain, collect, jev, campaign, marketing, message
+):
+    campaign()
+
+    await draft(brain, collect, message, marketing)
+
+    assert not any("wants_no_image" in questions for _, _, questions in jev.calls)
+
 async def test_illustrator_uses_the_design_teams_lessons(
     brain, collect, deps, llm, campaign, marketing, design, message
 ):
