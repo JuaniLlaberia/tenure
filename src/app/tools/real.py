@@ -9,6 +9,7 @@ and the brain's images) are read and stored through Files.
 import asyncio
 import logging
 import os
+from datetime import timedelta
 from uuid import uuid4
 
 from app.files import Files
@@ -24,6 +25,7 @@ logger = logging.getLogger(__name__)
 NO_BLUESKY = "Bluesky isn't connected. Set BLUESKY_HANDLE and BLUESKY_APP_PASSWORD."
 NO_EMAIL = "Email isn't connected. Set RESEND_API_KEY and RESEND_FROM."
 NO_FILES = "Files aren't available."
+POSTED_WITHIN = timedelta(hours=24)
 EXTENSIONS = {"image/jpeg": "jpg", "image/png": "png", "image/webp": "webp", "image/gif": "gif"}
 
 class MissingImage(Exception):
@@ -92,12 +94,28 @@ class RealTools:
         action_id = _new_id()
         if self._bluesky is None:
             return ActionResult(action_id=action_id, ok=False, error=NO_BLUESKY)
+        posted = await self._posted_already(text)
+        if posted is not None:
+            error = f"This exact text was already posted to Bluesky in the last 24 hours: {posted}"
+            return ActionResult(action_id=action_id, ok=False, error=error)
         try:
             uri, url = await self._bluesky.post(text, await self._post_images(business_id, images))
         except Exception as error:
             logger.exception("Posting to Bluesky failed")
             return ActionResult(action_id=action_id, ok=False, error=_reason(error))
         return ActionResult(action_id=action_id, ok=True, url=url, external_id=uri)
+
+    async def _posted_already(self, text: str) -> str | None:
+        """
+        The public URL of a post with the same text from the last 24 hours. If Bluesky can't be
+        asked, the post goes ahead.
+        """
+        try:
+            found = await self._bluesky.find(text, POSTED_WITHIN)
+        except Exception as error:
+            logger.warning("Couldn't check recent Bluesky posts: %s", _reason(error))
+            return None
+        return found[1] if found else None
 
     async def delete_social(self, business_id: str, external_id: str) -> ActionResult:
         action_id = _new_id()

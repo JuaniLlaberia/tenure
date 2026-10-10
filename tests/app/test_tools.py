@@ -1,4 +1,5 @@
 import json
+from datetime import UTC, datetime, timedelta
 from types import SimpleNamespace
 
 import httpx
@@ -26,12 +27,20 @@ from contract import (
 
 URI = "at://did:plc:abc/app.bsky.feed.post/3kxyz"
 
+def feed_item(text: str, created_at: datetime, uri: str = URI):
+    record = SimpleNamespace(text=text, created_at=created_at.isoformat())
+    return SimpleNamespace(post=SimpleNamespace(uri=uri, record=record), reason=None)
+
 class FakeAtproto:
     def __init__(self, failures: list[Exception] | None = None) -> None:
         self.failures = failures or []
         self.logins = 0
         self.posts: list[str] = []
         self.deleted: list[str] = []
+        self.feed: list = []
+
+    async def get_author_feed(self, actor, limit=None, filter=None):
+        return SimpleNamespace(feed=self.feed)
 
     async def login(self, handle, password):
         self.logins += 1
@@ -86,6 +95,36 @@ async def test_bluesky_does_not_retry_other_failures():
     with pytest.raises(NetworkError):
         await bluesky.post("Hello")
     assert client.posts == []
+
+async def test_a_timed_out_post_that_went_through_is_not_a_failure():
+    class LostAnswer(FakeAtproto):
+        async def send_post(self, builder):
+            self.feed.append(feed_item(builder.build_text(), datetime.now(UTC)))
+            raise InvokeTimeoutError()
+
+    client = LostAnswer()
+    bluesky = Bluesky("demo.bsky.social", "app-pass", make_client=lambda: client)
+    uri, url = await bluesky.post("Hello")
+    assert uri == URI and url.endswith("/post/3kxyz")
+
+async def test_the_same_text_is_not_posted_twice_in_a_day():
+    client = FakeAtproto()
+    client.feed = [feed_item("Doors  open Friday", datetime.now(UTC) - timedelta(hours=3))]
+    tools = RealTools(bluesky=Bluesky("demo.bsky.social", "pw", make_client=lambda: client))
+
+    result = await tools.post_social("b1", "Doors open Friday")
+
+    assert not result.ok and "already posted" in result.error and "/post/3kxyz" in result.error
+    assert client.posts == []
+
+async def test_the_same_text_can_go_out_again_after_a_day():
+    client = FakeAtproto()
+    client.feed = [feed_item("Doors open Friday", datetime.now(UTC) - timedelta(hours=25))]
+    tools = RealTools(bluesky=Bluesky("demo.bsky.social", "pw", make_client=lambda: client))
+
+    result = await tools.post_social("b1", "Doors open Friday")
+
+    assert result.ok and client.posts == ["Doors open Friday"]
 
 def test_markdown_to_html():
     html = markdown_to_html(
