@@ -258,6 +258,29 @@ async def test_a_scheduled_run_never_asks_and_makes_no_unasked_image(
     assert (await deps.store.get_task(needs.task_id)).steps == ["writer"]
     assert images.calls == []
 
+async def test_a_campaign_image_that_fails_is_explained(
+    brain, collect, campaign, images, marketing, design, message
+):
+    campaign()
+    images.fail = True
+
+    (needs,), events = await draft(brain, collect, message, marketing)
+
+    assert needs.planned_action.images == []
+    (note,) = [say for say in of(events, Say) if "couldn't make the image" in say.text]
+    assert note.text == (
+        "Otto couldn't make the image this time, so this draft has none. Reject it with a note "
+        "about the image to try again."
+    )
+    assert note.persona.name == "Maya" and events.index(needs) < events.index(note)
+
+async def test_a_made_image_needs_no_note(brain, collect, campaign, marketing, design, message):
+    campaign()
+
+    _, events = await draft(brain, collect, message, marketing)
+
+    assert not any("couldn't make the image" in say.text for say in of(events, Say))
+
 async def test_illustrator_uses_the_design_teams_lessons(
     brain, collect, deps, llm, campaign, marketing, design, message
 ):

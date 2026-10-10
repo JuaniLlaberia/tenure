@@ -54,6 +54,10 @@ WANTS_IMAGE = Question.yes_no(
 )
 
 IMAGE_QUESTION = "Want {name} to make an image for this?"
+NO_IMAGE_MADE = (
+    "{name} couldn't make the image this time, so this draft has none. Reject it with a note "
+    "about the image to try again."
+)
 IMAGE_REPLIES = ["Yes, make an image", "No image"]
 
 class ScheduleDraft(BaseModel):

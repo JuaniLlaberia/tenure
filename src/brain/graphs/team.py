@@ -28,6 +28,7 @@ from brain.prompts.lead import (
     IS_CLEAR,
     MENTIONS_IMAGE,
     NAMES_CHANNELS,
+    NO_IMAGE_MADE,
     ONE_OFF,
     STOPS_SCHEDULE,
     WANTS_IMAGE,
@@ -91,6 +92,7 @@ class TaskState(BaseModel):
     rendered: bool = False
     redraw: bool = False
     checks: int = 0
+    missed: str | None = None
 
 class TeamState(TypedDict, total=False):
     business_id: str
@@ -1060,6 +1062,7 @@ def build_team_graph(
         enter_task(ts.task.task_id)
         wanted = getattr(final_output(template_of(state), ts), "images", [])
         made: dict[str, FileRef] = {}
+        missed = None
         for file_id in [f for f in wanted if f in plans]:
             plan = plans[file_id]
             persona = drawer(state, ts, file_id)
@@ -1085,6 +1088,8 @@ def build_team_graph(
                 file = None
             if file is not None:
                 made[file_id] = file
+            else:
+                missed = persona.name
 
         def swap(ids: list[str]) -> list[str]:
             return [made[i].file_id if i in made else i for i in ids if i not in plans or i in made]
@@ -1104,6 +1109,7 @@ def build_team_graph(
                 "aspects": {},
                 "rendered": True,
                 "redraw": False,
+                "missed": None if made else missed,
             }
         )
 
@@ -1185,7 +1191,10 @@ def build_team_graph(
             emit(outcome)
             done = isinstance(outcome, ActionDone)
             task = await save(task, status=TaskStatus.DONE if done else TaskStatus.FAILED)
-        ts = ts.model_copy(update={"task": task, "phase": "done"})
+        if ts.missed:
+            text = NO_IMAGE_MADE.format(name=ts.missed)
+            emit(Say(team_id=state["team_id"], task_id=task.task_id, persona=lead, text=text))
+        ts = ts.model_copy(update={"task": task, "phase": "done", "missed": None})
         return {"tasks": put(state, ts)}
 
     def remember(state: TeamState) -> dict[str, dict]:
