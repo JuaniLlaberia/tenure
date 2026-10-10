@@ -93,6 +93,7 @@ class TaskState(BaseModel):
     redraw: bool = False
     checks: int = 0
     missed: str | None = None
+    approval_id: str | None = None
 
 class TeamState(TypedDict, total=False):
     business_id: str
@@ -1164,6 +1165,7 @@ def build_team_graph(
             )
             await deps.store.save_approval(approval)
             task = await save(task, status=TaskStatus.WAITING_APPROVAL)
+            ts = ts.model_copy(update={"approval_id": approval.approval_id})
             emit(
                 NeedsApproval(
                     approval_id=approval.approval_id,

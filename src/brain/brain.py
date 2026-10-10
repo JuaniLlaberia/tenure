@@ -35,7 +35,14 @@ from brain.media import (
     status,
     unheard,
 )
-from brain.prompts.lead import ABOUT_IMAGE, CANCELS, DROPPED, NEW_REQUEST, SET_ASIDE
+from brain.prompts.lead import (
+    ABOUT_IMAGE,
+    CANCELS,
+    DROPPED,
+    IS_DRAFT_FEEDBACK,
+    NEW_REQUEST,
+    SET_ASIDE,
+)
 from brain.templates.loader import load_templates, template_info
 from brain.usage import MeteredImages, MeteredJev, MeteredLLM, UsageLog, enter
 from contract import (
@@ -167,9 +174,43 @@ class TenureBrain:
             async for event in self._reply(team, snapshot, msg, text, described):
                 yield event
             return
+        draft = await self._feedback_target(team, snapshot.values, text)
+        if draft is not None:
+            decision = ApprovalDecision(
+                business_id=team.business_id,
+                approval_id=draft.approval_id,
+                decision="reject",
+                reason=text,
+            )
+            async for event in self.resolve_approval(decision):
+                yield event
+            return
         payload = new_request(team, text, msg.message_id, photos(described))
         async for event in self._run(team, payload):
             yield event
+
+    async def _feedback_target(self, team: Team, values: dict, text: str) -> Approval | None:
+        """
+        The team's newest pending draft, when the message is a change to it ("make it
+        shorter"): that's a rejection with the message as the reason.
+        """
+        if not text.strip():
+            return None
+        tasks = [*(values.get("past_tasks") or {}).values(), *(values.get("tasks") or {}).values()]
+        ids = {task.get("approval_id") for task in tasks} - {None}
+        pending = [
+            approval
+            for approval in [await self.deps.store.get_approval(i) for i in ids]
+            if approval is not None and approval.status == "pending"
+        ]
+        if not pending:
+            return None
+        newest = max(pending, key=lambda approval: approval.created_at)
+        state = f"Draft:\n{newest.preview}\n\nThe founder's new message: {text}"
+        reply = await decide(self.deps, {"is_draft_feedback": IS_DRAFT_FEEDBACK}, state)
+        if reply["is_draft_feedback"].accepts("yes", self.deps.settings.decide_threshold):
+            return newest
+        return None
 
     async def _reply(
         self, team: Team, snapshot, msg: IncomingMessage, text: str, described: list[MediaText]

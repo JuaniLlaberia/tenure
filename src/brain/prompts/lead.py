@@ -67,6 +67,14 @@ NEW_REQUEST = Question.yes_no(
     no="It answers the question, even briefly (like 'yes' or a channel name)",
 )
 
+IS_DRAFT_FEEDBACK = Question.yes_no(
+    "The team sent the founder a draft to approve. Is the founder's new message a change they "
+    "want to that draft (shorter, another tone, fix a fact, add or remove something), rather "
+    "than a new request, a question or something else?",
+    yes="A change to the draft",
+    no="A new request or something else",
+)
+
 DROPPED = "Okay, I've dropped that request."
 SET_ASIDE = "I'll set aside my question about {topic} and start on this."
 

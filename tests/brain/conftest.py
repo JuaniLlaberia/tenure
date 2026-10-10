@@ -148,6 +148,7 @@ def script(jev, llm):
                 "one_off": 0.1,
                 "cancels": 0.1,
                 "new_request": 0.1,
+                "is_draft_feedback": 0.1,
                 "is_clear": clear,
                 "passes_check": passes,
                 "names_channels": named,

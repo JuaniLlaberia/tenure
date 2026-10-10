@@ -103,3 +103,32 @@ async def test_an_answer_still_answers(brain, collect, jev, script, team, messag
 
     assert [d.task_type for d in of(events, NeedsApproval)] == ["social_post"]
     assert not any("set aside" in say.text or "dropped" in say.text for say in of(events, Say))
+
+async def test_feedback_on_the_pending_draft_revises_it(
+    brain, collect, deps, jev, script, team, message
+):
+    script()
+    first = await collect(brain.handle_message(message(team, "Post about our Friday launch")))
+    (draft,) = of(first, NeedsApproval)
+    jev.answers["is_draft_feedback"] = lambda state: 0.9 if "shorter" in state else 0.1
+
+    events = await collect(brain.handle_message(message(team, "make it shorter", "m2")))
+
+    (again,) = of(events, NeedsApproval)
+    assert again.task_id == draft.task_id and again.approval_id != draft.approval_id
+    old = await deps.store.get_approval(draft.approval_id)
+    assert (old.status, old.reason) == ("rejected", "make it shorter")
+    assert (await deps.store.get_task(draft.task_id)).revisions == 1
+
+async def test_a_new_request_with_a_draft_pending_is_a_new_request(
+    brain, collect, deps, jev, script, team, message
+):
+    script()
+    first = await collect(brain.handle_message(message(team, "Post about our Friday launch")))
+    (draft,) = of(first, NeedsApproval)
+
+    events = await collect(brain.handle_message(message(team, "Now a post about pricing", "m2")))
+
+    (other,) = of(events, NeedsApproval)
+    assert other.task_id != draft.task_id
+    assert (await deps.store.get_approval(draft.approval_id)).status == "pending"
