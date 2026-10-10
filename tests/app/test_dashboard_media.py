@@ -1,4 +1,5 @@
 from io import BytesIO
+from uuid import uuid4
 
 import httpx
 import pytest
@@ -81,6 +82,9 @@ async def test_draft_images_and_files_route(client, flows, chat, store):
     assert full.status_code == 200 and full.content == png()
     assert full.headers["content-type"] == "image/jpeg"
     assert full.headers["cache-control"] == "private, max-age=3600"
+    assert full.headers["x-content-type-options"] == "nosniff"
+    assert full.headers["content-security-policy"] == "sandbox"
+    assert "content-disposition" not in full.headers
     thumb = await client.get(f"/b/{token}/api/files/{file_id}?thumb=1")
     assert thumb.headers["content-type"] == "image/jpeg" and thumb.content[:2] == b"\xff\xd8"
 
@@ -191,7 +195,43 @@ async def test_schedules_run_stop_and_start_from_the_dashboard(client, flows, ch
 
     assert (await client.post(f"{base}/start")).status_code == 200
     assert (await overview(client, token))["schedules"][0]["active"]
-    assert (await client.post(f"/b/{token}/api/schedules/nope/run")).status_code == 409
+    unknown = f"/b/{token}/api/schedules/{uuid4()}/run"
+    assert (await client.post(unknown)).status_code == 409
+    bad = await client.post(f"/b/{token}/api/schedules/nope/run")
+    assert bad.status_code == 404 and bad.json()["detail"] == web_api.MISSING["schedule"]
+
+async def test_files_that_could_run_as_pages_download_instead(client, flows, chat, store):
+    token, _ = await setup(flows, chat, client)
+    business_id = flows._state.businesses[CHAT]
+    svg = await Files(store).save(business_id, b"<svg onload='alert(1)'/>", "image/svg+xml")
+    page = await Files(store).save(business_id, b"<script>alert(1)</script>", "text/html")
+
+    for ref in (svg, page):
+        response = await client.get(f"/b/{token}/api/files/{ref.file_id}")
+        assert response.status_code == 200
+        assert response.headers["content-disposition"] == "attachment"
+        assert response.headers["content-security-policy"] == "sandbox"
+
+async def test_malformed_ids_and_bodies_get_readable_errors(client, flows, chat):
+    token, _ = await setup(flows, chat, client)
+    routes = {
+        f"/b/{token}/api/approvals/x'1/approve": "draft",
+        f"/b/{token}/api/approvals/nope/reject": "draft",
+        f"/b/{token}/api/approvals/nope/new-image": "draft",
+        f"/b/{token}/api/actions/nope/undo": "action",
+        f"/b/{token}/api/lessons/nope/forget": "lesson",
+        f"/b/{token}/api/schedules/nope/stop": "schedule",
+    }
+    for url, what in routes.items():
+        response = await client.post(url, json={})
+        assert response.status_code == 404 and response.json()["detail"] == web_api.MISSING[what]
+    lower = await client.post(
+        f"/b/{token}/api/trust/lower", json={"team_id": "nope", "task_type": "social_post"}
+    )
+    assert lower.status_code == 404 and lower.json()["detail"] == web_api.MISSING["team"]
+
+    broken = await client.post(f"/b/{token}/api/trust/lower", content=b"{not json")
+    assert broken.status_code == 422 and broken.json() == {"message": web_api.BAD_REQUEST}
 
 async def test_another_business_cannot_touch_a_schedule(client, flows, chat, store):
     token, thread_id = await setup(flows, chat, client)
