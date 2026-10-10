@@ -95,6 +95,19 @@ def test_markdown_to_html():
     assert '<ul><li>one</li><li><a href="https://x.example">two</a></li></ul>' in html
     assert '<a href="https://y.example">https://y.example</a> &lt;now&gt;' in html
 
+def test_links_with_query_strings_keep_their_ampersands():
+    html = markdown_to_html(
+        "[Book](https://x.example/?a=1&utm_source=mail) or https://y.example/?a=1&b=2"
+    )
+    assert 'href="https://x.example/?a=1&amp;utm_source=mail"' in html
+    assert 'href="https://y.example/?a=1&amp;b=2"' in html
+    assert "&amp;amp;" not in html
+
+def test_a_quote_in_a_bare_url_stays_inside_the_link():
+    html = markdown_to_html('See https://x.example/a"onmouseover="alert(1)')
+    assert 'href="https://x.example/a&quot;onmouseover=&quot;alert(1)"' in html
+    assert ' onmouseover="' not in html
+
 def mock_http(handler) -> httpx.AsyncClient:
     return httpx.AsyncClient(transport=httpx.MockTransport(handler))
 
@@ -118,6 +131,14 @@ async def test_resend_errors_carry_the_reason():
 
     resend = Resend("re_key", "x@y.z", http=mock_http(handler))
     with pytest.raises(ResendError, match="testing emails"):
+        await resend.send("a@b.co", "S", "B")
+
+async def test_a_resend_error_page_that_isnt_json_is_readable():
+    def handler(request):
+        return httpx.Response(502, html="<html><body><h1>502 Bad Gateway</h1></body></html>")
+
+    resend = Resend("re_key", "x@y.z", http=mock_http(handler))
+    with pytest.raises(ResendError, match="Resend answered 502: 502 Bad Gateway"):
         await resend.send("a@b.co", "S", "B")
 
 SEARCH_PAGE = """
