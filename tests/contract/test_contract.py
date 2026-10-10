@@ -261,3 +261,31 @@ def test_new_image_is_a_decision_with_an_optional_reason():
         business_id="b1", approval_id="a1", decision="new_image", reason="Warmer colours"
     )
     assert ApprovalDecision.model_validate_json(warmer.model_dump_json()) == warmer
+
+def test_a_draft_may_carry_a_send_time():
+    friday = datetime(2026, 10, 16, 21, 0, tzinfo=UTC)
+    draft = NeedsApproval(
+        approval_id="a3",
+        team_id="t1",
+        task_id="k3",
+        task_type="social_post",
+        persona=MAYA,
+        preview="Doors open now!",
+        planned_action=PostSocial(text="Doors open now!"),
+        check_confidence=0.9,
+        send_at=friday,
+    )
+    assert NeedsApproval.model_validate_json(draft.model_dump_json()).send_at == friday
+    assert EVENTS[4].send_at is None
+    approval = Approval(
+        approval_id="a3",
+        business_id="b1",
+        team_id="t1",
+        task_id="k3",
+        task_type="social_post",
+        preview="Doors open now!",
+        planned_action=None,
+        check_confidence=0.9,
+        created_at=friday,
+    )
+    assert approval.send_at is None

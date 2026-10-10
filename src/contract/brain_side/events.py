@@ -42,6 +42,7 @@ class NeedsApproval(BaseModel):
     planned_action: PlannedAction | None
     media: list[FileRef] = []
     check_confidence: float
+    send_at: datetime | None = None
 
 class ActionDone(BaseModel):
     type: Literal["action_done"] = "action_done"

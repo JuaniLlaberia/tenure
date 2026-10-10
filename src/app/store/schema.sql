@@ -159,6 +159,7 @@ create index if not exists schedules_due on schedules (active, next_run_at);
 
 alter table tasks add column if not exists schedule_id uuid;
 alter table approvals add column if not exists media jsonb not null default '[]';
+alter table approvals add column if not exists send_at timestamptz;
 
 insert into storage.buckets (id, name, public) values ('files', 'files', false)
 on conflict (id) do nothing;
