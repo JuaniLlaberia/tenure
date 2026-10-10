@@ -53,6 +53,23 @@ WANTS_IMAGE = Question.yes_no(
     no="No image, or it isn't clear",
 )
 
+CANCELS = Question.yes_no(
+    "The team asked the founder a question about their request. Does the founder's reply drop "
+    "the request (never mind, forget it, cancel, not now)?",
+    yes="They want to drop the request",
+    no="They answer the question, or say something else",
+)
+
+NEW_REQUEST = Question.yes_no(
+    "The team asked the founder a question about their request. Is the founder's reply a new, "
+    "unrelated request instead of an answer?",
+    yes="A new request that doesn't answer the question",
+    no="It answers the question, even briefly (like 'yes' or a channel name)",
+)
+
+DROPPED = "Okay, I've dropped that request."
+SET_ASIDE = "I'll set aside my question about {topic} and start on this."
+
 IMAGE_QUESTION = "Want {name} to make an image for this?"
 NO_IMAGE_MADE = (
     "{name} couldn't make the image this time, so this draft has none. Reject it with a note "

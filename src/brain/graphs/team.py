@@ -118,6 +118,7 @@ class TeamState(TypedDict, total=False):
     reasoning: bool
     ask_channels: bool
     ask_image: bool
+    drop: bool
     history: list[str]
     routed: list[str]
     plan_question: str | None
@@ -162,6 +163,7 @@ def new_request(
         "reasoning": False,
         "ask_channels": False,
         "ask_image": False,
+        "drop": False,
         "routed": [],
         "plan_question": None,
         "clarified": 0,
@@ -251,6 +253,8 @@ def build_team_graph(
         )
 
     def after_entry(state: TeamState) -> str:
+        if state.get("drop"):
+            return END
         if state.get("revise") and state.get("order"):
             return "dispatch"
         if not state["onboarded"]:
@@ -1262,7 +1266,7 @@ def build_team_graph(
 
     graph.add_edge(START, "entry")
     graph.add_conditional_edges(
-        "entry", after_entry, ["dispatch", "onboard_intro", "onboard_done", "triage"]
+        "entry", after_entry, ["dispatch", "onboard_intro", "onboard_done", "triage", END]
     )
     graph.add_edge("onboard_intro", "onboard")
     graph.add_conditional_edges("onboard", after_onboard, ["onboard", "onboard_done"])

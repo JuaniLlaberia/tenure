@@ -6,7 +6,7 @@ from brain.deps import Settings
 from brain.helpers.images import OpenRouterImages
 from brain.helpers.jev import OpenRouterJev
 from brain.helpers.llm import OpenRouterLLM
-from contract import Error, NeedsApproval, Say
+from contract import Ask, Error, NeedsApproval, Say
 
 SETTINGS = Settings(openrouter_api_key="sk-test-key")
 NO_CREDITS = {"error": {"code": 402, "message": "Insufficient credits. Add more using /credits"}}
@@ -64,3 +64,42 @@ async def test_jev_out_of_credits_never_falls_back_to_another_model(
     assert [e.message for e in of(events, Error)] == [OUT_OF_CREDITS]
     assert llm.calls == []
     assert not of(events, Say)
+
+async def asked_where(brain, collect, script, team, message):
+    script(task_types=("social_post", "newsletter"), named=0.1)
+    events = await collect(brain.handle_message(message(team, "Start a campaign for our launch")))
+    assert isinstance(events[-1], Ask)
+
+async def test_never_mind_drops_the_request(brain, collect, jev, script, team, message):
+    await asked_where(brain, collect, script, team, message)
+    jev.answers["cancels"] = lambda state: 0.9 if "never mind" in state else 0.1
+
+    events = await collect(brain.handle_message(message(team, "never mind", "m2")))
+
+    assert [say.text for say in of(events, Say)] == ["Okay, I've dropped that request."]
+    assert not of(events, NeedsApproval) and not of(events, Ask)
+    script(named=0.9)
+    after = await collect(brain.handle_message(message(team, "Make a Bluesky post", "m3")))
+    assert of(after, NeedsApproval)
+
+async def test_a_new_request_sets_the_question_aside(brain, collect, jev, script, team, message):
+    await asked_where(brain, collect, script, team, message)
+    script(task_types=("social_post",), named=0.9)
+    jev.answers["new_request"] = lambda state: 0.9 if "pricing" in state else 0.1
+
+    events = await collect(brain.handle_message(message(team, "Post about our pricing", "m2")))
+
+    assert of(events, Say)[0].text == (
+        "I'll set aside my question about “Start a campaign for our launch” and start on this."
+    )
+    (needs,) = of(events, NeedsApproval)
+    assert needs.task_type == "social_post"
+
+async def test_an_answer_still_answers(brain, collect, jev, script, team, message):
+    await asked_where(brain, collect, script, team, message)
+    jev.answers["needs_newsletter"] = 0.1
+
+    events = await collect(brain.handle_message(message(team, "Only Bluesky", "m2")))
+
+    assert [d.task_type for d in of(events, NeedsApproval)] == ["social_post"]
+    assert not any("set aside" in say.text or "dropped" in say.text for say in of(events, Say))
