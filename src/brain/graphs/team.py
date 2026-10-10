@@ -15,7 +15,7 @@ from brain.common import new_id
 from brain.context import build_context
 from brain.deps import Deps
 from brain.flows.actions import execute_action
-from brain.flows.approvals import MAX_REVISIONS
+from brain.flows.approvals import MAX_CHECKS
 from brain.flows.autonomy import gate
 from brain.graphs.specialist import build_specialist_graph, run_specialist
 from brain.helpers.decide import decide
@@ -85,6 +85,7 @@ class TaskState(BaseModel):
     aspects: dict[str, str] = {}
     rendered: bool = False
     redraw: bool = False
+    checks: int = 0
 
 class TeamState(TypedDict, total=False):
     business_id: str
@@ -236,6 +237,7 @@ def build_team_graph(
                 "check_confidence": None,
                 "reasoning": reasoning,
                 "redraw": redraw,
+                "checks": 0,
             }
         )
 
@@ -930,7 +932,7 @@ def build_team_graph(
             prompts=ts.prompts,
         )
         tokens = state.get("tokens_used", 0) + result.tokens
-        if result.passed or task.revisions >= MAX_REVISIONS:
+        if result.passed or ts.checks >= MAX_CHECKS:
             task = await save(task, tokens_used=task.tokens_used + result.tokens)
             ts = ts.model_copy(
                 update={"task": task, "phase": "gate", "check_confidence": result.confidence}
@@ -940,11 +942,17 @@ def build_team_graph(
             tokens += routing
             task = await save(
                 task,
-                revisions=task.revisions + 1,
                 current_step=step,
                 tokens_used=task.tokens_used + result.tokens + routing,
             )
-            ts = ts.model_copy(update={"task": task, "phase": "work", "feedback": result.feedback})
+            ts = ts.model_copy(
+                update={
+                    "task": task,
+                    "phase": "work",
+                    "feedback": result.feedback,
+                    "checks": ts.checks + 1,
+                }
+            )
         return {"tasks": put(state, ts), "tokens_used": tokens}
 
     def drawer(state: TeamState, ts: TaskState, file_id: str) -> Persona:

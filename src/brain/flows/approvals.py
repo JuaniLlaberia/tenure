@@ -28,6 +28,7 @@ LearnHook = Callable[[Approval, Literal["edit", "reject"], str], AsyncIterator[E
 ReviseHook = Callable[[Approval, str], AsyncIterator[Event]]
 
 MAX_REVISIONS = 2
+MAX_CHECKS = 2
 
 @dataclass
 class Context:

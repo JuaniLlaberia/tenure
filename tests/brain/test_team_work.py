@@ -3,6 +3,7 @@ import pytest
 from brain.fakes import InMemoryStore
 from contract import (
     ActionDone,
+    ApprovalDecision,
     Ask,
     AutonomyLevel,
     BusinessProfile,
@@ -212,7 +213,7 @@ async def test_failed_check_reruns_writer_with_feedback(
     writer = prompts_for(llm, "Leo")
     assert len(writer) == 2
     assert "Mention the date" in writer[1]
-    assert (await deps.store.get_task(needs.task_id)).revisions == 1
+    assert (await deps.store.get_task(needs.task_id)).revisions == 0
 
 async def test_two_failed_checks_go_to_approval_anyway(
     brain, collect, deps, llm, script, team, message
@@ -223,8 +224,59 @@ async def test_two_failed_checks_go_to_approval_anyway(
 
     needs = of(events, NeedsApproval)[0]
     assert needs.check_confidence == pytest.approx(0.1)
-    assert (await deps.store.get_task(needs.task_id)).revisions == 2
+    assert (await deps.store.get_task(needs.task_id)).revisions == 0
     assert len(prompts_for(llm, "Leo")) == 3
+
+async def test_review_retries_leave_the_founder_both_revisions(
+    brain, collect, deps, jev, llm, script, team, message
+):
+    script()
+    jev.answers["passes_check"] = [0.1, 0.1, 0.1]
+
+    events = await collect(brain.handle_message(message(team, "Post about our Friday launch")))
+    needs = of(events, NeedsApproval)[0]
+    jev.answers["passes_check"] = 0.9
+    for round_ in (1, 2):
+        decision = ApprovalDecision(
+            business_id=team.business_id,
+            approval_id=needs.approval_id,
+            decision="reject",
+            reason="Mention the venue",
+        )
+        events = await collect(brain.resolve_approval(decision))
+        needs = of(events, NeedsApproval)[0]
+        assert (await deps.store.get_task(needs.task_id)).revisions == round_
+
+    decision = ApprovalDecision(
+        business_id=team.business_id,
+        approval_id=needs.approval_id,
+        decision="reject",
+        reason="Shorter",
+    )
+    events = await collect(brain.resolve_approval(decision))
+    assert not of(events, NeedsApproval)
+    assert "dropped" in of(events, Say)[-1].text
+
+async def test_each_founder_revision_gets_its_own_review_retries(
+    brain, collect, jev, llm, script, team, message
+):
+    script()
+    jev.answers["passes_check"] = [0.1, 0.1, 0.1]
+    events = await collect(brain.handle_message(message(team, "Post about our Friday launch")))
+    needs = of(events, NeedsApproval)[0]
+    before = len(prompts_for(llm, "Leo"))
+    jev.answers["passes_check"] = [0.1, 0.1, 0.1]
+
+    decision = ApprovalDecision(
+        business_id=team.business_id,
+        approval_id=needs.approval_id,
+        decision="reject",
+        reason="Mention the venue",
+    )
+    events = await collect(brain.resolve_approval(decision))
+
+    assert of(events, NeedsApproval)
+    assert len(prompts_for(llm, "Leo")) - before == 3
 
 async def test_act_and_report_acts_without_approval(
     brain, collect, deps, script, make_team, message
