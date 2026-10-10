@@ -6,8 +6,9 @@ Start with: uv run --env-file .env python -m app.main
 import asyncio
 import logging
 import os
-from collections.abc import AsyncIterator
-from contextlib import asynccontextmanager
+from collections.abc import AsyncIterator, Awaitable, Callable
+from contextlib import AsyncExitStack, asynccontextmanager
+from typing import TypeVar
 
 import uvicorn
 from telegram import Update
@@ -27,6 +28,10 @@ from brain.deps import Settings
 from contract import Brain, Tools
 
 logger = logging.getLogger(__name__)
+
+T = TypeVar("T")
+STARTUP_TRIES = 5
+FIRST_WAIT = 2.0
 
 COMMANDS = [
     ("start", "Set up your business"),
@@ -52,6 +57,32 @@ def make_store() -> AppStore:
     logger.warning("SUPABASE_URL or SUPABASE_SERVICE_KEY not set: data stays in memory")
     return InMemoryStore()
 
+async def with_retries(
+    what: str,
+    step: Callable[[], Awaitable[T]],
+    tries: int = STARTUP_TRIES,
+    wait: float = FIRST_WAIT,
+) -> T:
+    """
+    Runs one startup step that needs the database, waiting longer after each failure, so a
+    slow or briefly unreachable Supabase doesn't stop the app. Gives up with a clear message.
+    """
+    for attempt in range(1, tries + 1):
+        try:
+            return await step()
+        except Exception as error:
+            if attempt == tries:
+                raise SystemExit(
+                    f"Couldn't {what} after {tries} tries ({type(error).__name__}: {error}). "
+                    "Check that Supabase is up and the settings in .env are right."
+                ) from error
+            logger.warning(
+                "Couldn't %s (%s); trying again in %.0f s", what, type(error).__name__, wait
+            )
+            await asyncio.sleep(wait)
+            wait *= 2
+    raise AssertionError("unreachable")
+
 @asynccontextmanager
 async def open_brain(store: AppStore, tools: Tools) -> AsyncIterator[Brain]:
     """
@@ -71,7 +102,11 @@ async def open_brain(store: AppStore, tools: Tools) -> AsyncIterator[Brain]:
         )
     if settings.database_url is None:
         logger.warning("DATABASE_URL not set: brain conversations are lost on restart")
-    async with open_checkpointer(settings) as checkpointer:
+    async with AsyncExitStack() as stack:
+        checkpointer = await with_retries(
+            "open the brain's database",
+            lambda: stack.enter_async_context(open_checkpointer(settings)),
+        )
         logger.info("Using the real brain")
         yield create_brain(store, tools, settings, checkpointer)
 
@@ -89,7 +124,7 @@ async def serve(token: str, brain: Brain, store: AppStore, tools: RealTools) -> 
     api = create_api(flows, store, brain)
     server = uvicorn.Server(uvicorn.Config(api, host=host, port=port, log_level="warning"))
     async with application:
-        await flows.load()
+        await with_retries("load saved state from the store", flows.load)
         await tools.check()
         await application.start()
         await application.bot.set_my_commands(COMMANDS)
