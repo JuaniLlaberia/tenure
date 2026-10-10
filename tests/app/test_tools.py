@@ -12,7 +12,7 @@ from app.tools.bluesky import Bluesky, rich_text
 from app.tools.email import Resend, ResendError, markdown_to_html
 from app.tools.keenable import Keenable
 from app.tools.real import NO_BLUESKY, NO_EMAIL, RealTools
-from app.tools.web import TEXT_LIMIT, Web, is_public, parse_results
+from app.tools.web import PDF_NOTE, TEXT_LIMIT, Web, full_url, is_public, parse_results
 from contract import (
     ActionDone,
     ActionResult,
@@ -197,8 +197,39 @@ async def test_fetch_skips_non_text_and_truncates():
         return httpx.Response(200, text="x" * (TEXT_LIMIT + 50))
 
     web = Web(http=mock_http(handler), check_address=always_public)
-    assert await web.fetch("https://b.example/file.pdf") is None
+    pdf = await web.fetch("https://b.example/file.pdf")
+    assert pdf.text == PDF_NOTE and pdf.title == "PDF document"
     assert len((await web.fetch("https://b.example/long.txt")).text) == TEXT_LIMIT
+
+async def test_images_and_other_files_are_not_pages():
+    def handler(request):
+        return httpx.Response(200, content=b"\x89PNG", headers={"content-type": "image/png"})
+
+    web = Web(http=mock_http(handler), check_address=always_public)
+    assert await web.fetch("https://b.example/logo.png") is None
+
+async def test_a_bare_domain_is_fetched_over_https():
+    seen = []
+
+    def handler(request):
+        seen.append(str(request.url))
+        return httpx.Response(200, html=PAGE)
+
+    async def check(url: str) -> bool:
+        seen.append(f"checked {url}")
+        return True
+
+    web = Web(http=mock_http(handler), check_address=check)
+    page = await web.fetch(" brightcoaching.com/about ")
+    assert page.title == "Bright Coaching"
+    assert seen == ["checked https://brightcoaching.com/about", "https://brightcoaching.com/about"]
+
+def test_full_url_only_adds_https_to_domains():
+    assert full_url("mysite.com") == "https://mysite.com"
+    assert full_url("www.my-site.co.uk/pricing?x=1") == "https://www.my-site.co.uk/pricing?x=1"
+    assert full_url("http://mysite.com") == "http://mysite.com"
+    assert full_url("not a link") == "not a link"
+    assert full_url("localhost") == "localhost"
 
 async def test_real_tools_report_missing_connections():
     tools = RealTools()
