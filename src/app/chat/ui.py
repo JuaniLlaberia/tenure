@@ -13,6 +13,7 @@ from contract import (
     ActionUndone,
     Ask,
     AutonomyLevel,
+    BusinessProfile,
     Error,
     FileRef,
     LessonLearned,
@@ -64,6 +65,7 @@ SCHEDULE_AT = "sa"
 SEND_NOW = "sn"
 UNSCHEDULE = "su"
 MESSAGE_LIMIT = 4000
+DEFAULT_TIMEZONE = "America/Los_Angeles"
 
 TASK_TITLES = {
     "social_post": "Bluesky post",
@@ -277,13 +279,13 @@ def local_when(moment: datetime, timezone: str) -> str:
     return f"{local:%a} {local.day} {local:%b}, {local.hour}:{local.minute:02d}"
 
 def goes_out(moment: datetime, timezone: str) -> str:
-    return f"⏰ Goes out {local_when(moment, timezone)} ({_place(timezone)} time) once you approve"
+    return f"⏰ Goes out {local_when(moment, timezone)} ({place(timezone)} time) once you approve"
 
 def scheduled_footer(moment: datetime, timezone: str) -> str:
     return f"✓ Approved · ⏰ goes out {local_when(moment, timezone)}"
 
 def when_prompt(timezone: str) -> str:
-    return f"⏰ When should it go out? ({_place(timezone)} time)"
+    return f"⏰ When should it go out? ({place(timezone)} time)"
 
 def when_keyboard(approval_id: str) -> Keyboard:
     def choice(label: str, key: str) -> Button:
@@ -563,7 +565,18 @@ WEEKDAY_NAMES = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturd
 SCHEDULE_STOPPED = "Stopped"
 TEAM_BUSY = "The team is waiting for your answer first. Answer it, then try again."
 
-def _place(timezone: str) -> str:
+def timezone_name(profile: BusinessProfile | None) -> str:
+    """
+    The business's timezone (contract v0.8: profile.extra["timezone"]), or Los Angeles.
+    """
+    zone = (profile.extra.get("timezone") if profile else None) or DEFAULT_TIMEZONE
+    try:
+        ZoneInfo(zone)
+    except Exception:
+        return DEFAULT_TIMEZONE
+    return zone
+
+def place(timezone: str) -> str:
     return timezone.rsplit("/", 1)[-1].replace("_", " ")
 
 def _ordinal(n: int) -> str:
@@ -572,7 +585,7 @@ def _ordinal(n: int) -> str:
 
 def cadence_words(schedule: Schedule) -> str:
     cadence = schedule.cadence
-    at = f"{cadence.hour}:{cadence.minute:02d} ({_place(cadence.timezone)})"
+    at = f"{cadence.hour}:{cadence.minute:02d} ({place(cadence.timezone)})"
     if cadence.every == "day":
         return f"Every day at {at}"
     if cadence.every == "month":

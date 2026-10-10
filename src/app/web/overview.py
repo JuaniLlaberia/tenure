@@ -5,14 +5,17 @@ Builds the dashboard's JSON from the store: one call returns everything the page
 import asyncio
 from datetime import datetime, timedelta
 from typing import Any
+from zoneinfo import ZoneInfo
 
 from app.chat import ui
+from app.chat.state import Timed
 from app.store.base import AppStore
 from contract import (
     Approval,
     AuditEntry,
     AutonomyLevel,
     Brain,
+    BusinessProfile,
     FileRef,
     Lesson,
     ModelUsage,
@@ -54,6 +57,7 @@ async def build_overview(
     now: datetime,
     deciding: frozenset[str] = frozenset(),
     running: frozenset[str] = frozenset(),
+    timed: dict[str, Timed] | None = None,
 ) -> dict[str, Any]:
     templates = {t.name: t for t in brain.list_templates()}
     profile, teams, tasks, approvals, actions, lessons, usage, schedules = await asyncio.gather(
@@ -88,8 +92,13 @@ async def build_overview(
             _team(team, templates.get(team.template), trust[team.team_id]) for team in teams
         ],
         "drafts": [
-            _draft(a, approvals, team_by_id, templates, trust, context) for a in pending
+            {
+                **_draft(a, approvals, team_by_id, templates, trust, context),
+                "send": _send(timed.get(a.approval_id)) if timed else None,
+            }
+            for a in pending
         ],
+        "timezone": _timezone(profile),
         "tasks": [_task(task, team_names) for task in tasks],
         "lessons": [_lesson(lesson, team_names, leads) for lesson in lessons],
         "activity": [
@@ -257,6 +266,25 @@ def _draft(
         "promote_after": trust.promote_after if trust else 5,
         "created_at": approval.created_at,
     }
+
+def _send(timed: Timed | None) -> dict[str, Any] | None:
+    """
+    A draft's send time: when, in the business's words and as a datetime-local input value.
+    """
+    if timed is None:
+        return None
+    local = timed.send_at.astimezone(ZoneInfo(timed.timezone))
+    return {
+        "at": timed.send_at,
+        "local": ui.local_when(timed.send_at, timed.timezone),
+        "place": ui.place(timed.timezone),
+        "input": f"{local:%Y-%m-%dT%H:%M}",
+        "scheduled": timed.decision is not None,
+    }
+
+def _timezone(profile: BusinessProfile | None) -> dict[str, str]:
+    zone = ui.timezone_name(profile)
+    return {"name": zone, "place": ui.place(zone)}
 
 def avatar_url(persona: Persona) -> str | None:
     return f"/avatars/{persona.avatar}" if persona.avatar else None

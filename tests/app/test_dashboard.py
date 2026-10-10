@@ -512,3 +512,31 @@ async def test_a_rejected_draft_leaves_at_once_while_the_team_revises(
     data = await overview(client, token)
     assert post["approval_id"] not in {d["approval_id"] for d in data["drafts"]}
     await flows.drain()
+
+async def test_send_times_on_the_dashboard(client, flows, chat, store):
+    token, thread_id = await setup(flows, chat, client)
+    await say(flows, "Post about the launch on Friday at 6pm", thread_id)
+    post = await post_draft(client, token)
+    base = f"/b/{token}/api/approvals/{post['approval_id']}"
+    assert post["send"]["local"] == "Fri 9 Oct, 18:00" and not post["send"]["scheduled"]
+    assert (await overview(client, token))["timezone"]["place"] == "Los Angeles"
+
+    response = await client.post(f"{base}/approve", json={})
+    assert response.json()["message"] == "Approved. It goes out Fri 9 Oct, 18:00."
+    assert (await post_draft(client, token))["send"]["scheduled"]
+    await client.post(f"{base}/unschedule")
+    assert not (await post_draft(client, token))["send"]["scheduled"]
+
+    response = await client.post(f"{base}/send-time", json={"at": "2026-10-09T09:30"})
+    assert response.json()["message"] == "It goes out Fri 9 Oct, 9:30 once you approve it."
+    assert (await post_draft(client, token))["send"]["input"] == "2026-10-09T09:30"
+    bad = await client.post(f"{base}/send-time", json={"at": "soon"})
+    assert bad.status_code == 409 and "didn't look right" in bad.json()["message"]
+    await client.post(f"{base}/send-time", json={"at": None})
+    assert (await post_draft(client, token))["send"] is None
+
+    await client.post(f"{base}/send-time", json={"at": "2026-10-09T09:30"})
+    await client.post(f"{base}/approve", json={})
+    await client.post(f"{base}/send-now")
+    await flows.drain()
+    assert [a.tool for a in await store.list_actions(next(iter(flows._state.businesses.values())))]

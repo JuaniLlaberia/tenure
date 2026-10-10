@@ -13,7 +13,6 @@ from datetime import UTC, datetime, timedelta
 from functools import partial
 from typing import Any, Literal
 from uuid import uuid4
-from zoneinfo import ZoneInfo
 
 from app.chat import reports, ui, when
 from app.chat.port import Chat, IncomingFile, Keyboard, TopicGone
@@ -44,6 +43,7 @@ from contract import (
     Ask,
     AutonomyLevel,
     Brain,
+    BusinessProfile,
     Error,
     Event,
     FileRef,
@@ -82,7 +82,6 @@ DASHBOARD_FOOTERS = {
 REVISIONS_INCLUDED = 2
 PROMPT_TTL = timedelta(minutes=10)
 RUN_LIMIT = 15 * 60.0
-DEFAULT_TIMEZONE = "America/Los_Angeles"
 TIMED_OUT = {
     "edit": ui.EDIT_TIMED_OUT,
     "text": ui.EDIT_TIMED_OUT,
@@ -621,6 +620,13 @@ class Flows:
             raise Refused(ui.failed_on_dashboard(task.result()))
 
     @property
+    def timed(self) -> dict[str, Timed]:
+        """
+        Drafts with a send time, by approval id, for the dashboard.
+        """
+        return dict(self._state.timed)
+
+    @property
     def deciding(self) -> frozenset[str]:
         """
         Drafts being decided right now, which the dashboard no longer offers.
@@ -709,13 +715,11 @@ class Flows:
             await self._close(card, footer, ui.scheduled_keyboard(approval_id))
 
     async def _timezone(self, business_id: str) -> str:
-        profile = await self._store.get_profile(business_id)
-        zone = (profile.extra.get("timezone") if profile else None) or DEFAULT_TIMEZONE
-        try:
-            ZoneInfo(zone)
-        except Exception:
-            return DEFAULT_TIMEZONE
-        return zone
+        return self.timezone_name(await self._store.get_profile(business_id))
+
+    @staticmethod
+    def timezone_name(profile: BusinessProfile | None) -> str:
+        return ui.timezone_name(profile)
 
     async def set_send_time(
         self, business_id: str, approval_id: str, send_at: datetime | None

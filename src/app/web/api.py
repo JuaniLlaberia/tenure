@@ -12,12 +12,14 @@ from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any
 from uuid import UUID
+from zoneinfo import ZoneInfo
 
 from fastapi import FastAPI, HTTPException, Request, Response
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import FileResponse, HTMLResponse, JSONResponse
 from pydantic import BaseModel, Field
 
+from app.chat import ui
 from app.chat.flows import Flows, Refused
 from app.store.base import AppStore
 from app.tools import images as pictures
@@ -58,6 +60,9 @@ class Approve(BaseModel):
 
 class Reject(BaseModel):
     reason: str | None = None
+
+class SendTime(BaseModel):
+    at: str | None = None
 
 class Lower(BaseModel):
     team_id: str
@@ -129,6 +134,12 @@ def _file_headers(mime_type: str) -> dict[str, str]:
     if mime_type not in RASTER:
         headers["Content-Disposition"] = "attachment"
     return headers
+
+def _approved(flows: Flows, approval_id: str, done: str) -> str:
+    timed = flows.timed.get(approval_id)
+    if timed is not None and timed.decision is not None:
+        return f"{done}. It goes out {ui.local_when(timed.send_at, timed.timezone)}."
+    return f"{done}. The result shows up in Telegram too."
 
 def _utcnow() -> datetime:
     return datetime.now(UTC)
@@ -216,7 +227,13 @@ def create_api(
     async def overview(token: str, request: Request) -> dict[str, Any]:
         business_id = await business(request, token)
         return await build_overview(
-            store, brain, business_id, clock(), flows.deciding, flows.running_schedules
+            store,
+            brain,
+            business_id,
+            clock(),
+            flows.deciding,
+            flows.running_schedules,
+            flows.timed,
         )
 
     @api.post("/b/{token}/api/hire")
@@ -235,7 +252,7 @@ def create_api(
         version = _edited(approval.planned_action, body or Approve())
         if version is None:
             await flows.decide_from_dashboard(business_id, approval_id, "approve")
-            return {"message": "Approved. The result shows up in Telegram too."}
+            return {"message": _approved(flows, approval_id, "Approved")}
         if isinstance(version, PostSocial):
             text = version.text
             only_text = version.model_copy(update={"text": approval.planned_action.text})
@@ -250,7 +267,43 @@ def create_api(
             edited_text=text,
             edited_action=version if whole else None,
         )
+        held = flows.timed.get(approval_id)
+        if held is not None and held.decision is not None:
+            return {"message": _approved(flows, approval_id, "Your version is approved")}
         return {"message": "Your version is going out. The team will learn from your changes."}
+
+    @api.post("/b/{token}/api/approvals/{approval_id}/send-time")
+    async def send_time(token: str, approval_id: str, body: SendTime, request: Request) -> dict:
+        business_id = await business(request, token)
+        _known(approval_id, "draft")
+        at = None
+        if body.at:
+            zone = flows.timezone_name(await store.get_profile(business_id))
+            try:
+                at = datetime.fromisoformat(body.at)
+            except ValueError as error:
+                raise Refused("That time didn't look right. Pick it again.") from error
+            if at.tzinfo is None:
+                at = at.replace(tzinfo=ZoneInfo(zone))
+            at = at.astimezone(UTC)
+        await flows.set_send_time(business_id, approval_id, at)
+        timed = flows.timed.get(approval_id)
+        if timed is None:
+            return {"message": "It goes out as soon as you approve it."}
+        when = ui.local_when(timed.send_at, timed.timezone)
+        return {"message": f"It goes out {when} once you approve it."}
+
+    @api.post("/b/{token}/api/approvals/{approval_id}/send-now")
+    async def send_now(token: str, approval_id: str, request: Request) -> dict[str, str]:
+        business_id = await business(request, token)
+        await flows.send_now(business_id, _known(approval_id, "draft"))
+        return {"message": "Sending it now. The result shows up in Telegram too."}
+
+    @api.post("/b/{token}/api/approvals/{approval_id}/unschedule")
+    async def unschedule(token: str, approval_id: str, request: Request) -> dict[str, str]:
+        business_id = await business(request, token)
+        await flows.cancel_scheduled(business_id, _known(approval_id, "draft"))
+        return {"message": ui.SCHEDULE_CANCELLED}
 
     @api.post("/b/{token}/api/approvals/{approval_id}/reject")
     async def reject(token: str, approval_id: str, body: Reject, request: Request) -> dict:
