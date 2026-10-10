@@ -1,6 +1,6 @@
 from pydantic import BaseModel, field_validator
 
-from brain.context import MAX_FETCH_CHARS, profile_section
+from brain.context import MAX_FETCH_CHARS, UNTRUSTED_RULE, fence, profile_section
 from brain.helpers.decide import Question
 from brain.helpers.llm import Message
 from contract import BusinessProfile, PageContent, Persona, Team
@@ -104,8 +104,8 @@ def extract_messages(
         'customers, prices (as stated, e.g. "packages from $2,500"), tone (how they sound or '
         "want to sound), main_clients (named clients), links, extra (short key: value pairs). "
         "Leave a field null or empty only when nothing supports it. Put any other useful fact "
-        'about the business in "facts" as short sentences. Never invent anything. Reply as '
-        'JSON: {"fields": {...}, "facts": [...]}.'
+        'about the business in "facts" as short sentences. Never invent anything. '
+        f'{UNTRUSTED_RULE} Reply as JSON: {{"fields": {{...}}, "facts": [...]}}.'
     )
     user = f"Question: {question}\nAnswer: {answer}"
     for page in pages:
@@ -113,7 +113,7 @@ def extract_messages(
             source = f"File the founder sent, {page.title}"
         else:
             source = f"Website {page.url} ({page.title or 'no title'})"
-        user += f"\n\n{source}:\n{page.text[:MAX_FETCH_CHARS]}"
+        user += f"\n\n{source}:\n{fence(page.text[:MAX_FETCH_CHARS], source)}"
     user += f"\n\nAlready known: {draft.model_dump(exclude_defaults=True) or 'nothing'}"
     return [{"role": "system", "content": system}, {"role": "user", "content": user}]
 
