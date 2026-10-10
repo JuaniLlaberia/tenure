@@ -68,9 +68,15 @@ async def decide(deps: Deps, questions: dict[str, Question], state: str) -> Deci
     return Decisions(answers={key: answers[key] for key in questions}, tokens=tokens)
 
 def _truncate(state: str) -> str:
+    """
+    Keeps the start (the team and what it does) and the end (the latest message) of a long
+    state, cutting the middle.
+    """
     if len(state) <= MAX_STATE_CHARS:
         return state
-    return "…" + state[-(MAX_STATE_CHARS - 1) :]
+    head = MAX_STATE_CHARS // 3
+    tail = MAX_STATE_CHARS - head - 1
+    return state[:head] + "…" + state[-tail:]
 
 def _clamp(value: float) -> float:
     return min(1.0, max(0.0, value))

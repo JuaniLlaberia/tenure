@@ -4,7 +4,7 @@ from typing import Literal
 from langgraph.checkpoint.memory import InMemorySaver
 from langgraph.types import Command
 
-from brain.common import guarded, utcnow
+from brain.common import clip_request, guarded, utcnow
 from brain.deps import Deps, Settings
 from brain.flows.approvals import resolve_approval
 from brain.flows.hire import hire_team
@@ -156,7 +156,7 @@ class TenureBrain:
         described: list[MediaText] = []
         async for event in self._read(msg, lead, described):
             yield event
-        text = attachments_text(msg.text, described)
+        text = clip_request(attachments_text(msg.text, described))
         if (msg.attachments and not text) or nothing_heard(msg.text, described):
             return
         snapshot = await self.team_graph.aget_state(self._config(team))
@@ -340,13 +340,13 @@ class TenureBrain:
         described: list[MediaText] = []
         async for event in self._read(msg, CHIEF_OF_STAFF, described):
             yield event
-        text = attachments_text(msg.text, described)
+        text = clip_request(attachments_text(msg.text, described))
         if (msg.attachments and not text) or nothing_heard(msg.text, described):
             return
         config = _thread(f"{msg.business_id}:company")
         snapshot = await self.company_graph.aget_state(config)
         if snapshot.interrupts:
-            payload = Command(resume=onboarding_answer(msg.text, described))
+            payload = Command(resume=onboarding_answer(clip_request(msg.text), described))
         else:
             payload = {"business_id": msg.business_id, "restart": False, "message": text}
         async for event in _stream(self.company_graph, config, payload):

@@ -1,5 +1,6 @@
 import pytest
 
+from brain.common import CUT, MAX_REQUEST_CHARS, clip_request
 from brain.fakes import InMemoryStore
 from contract import (
     ActionDone,
@@ -85,6 +86,25 @@ async def test_triage_is_one_jev_call_with_team_context(
     assert "Post about our Friday launch" in state
     for spec in deps.templates["marketing"].task_types.values():
         assert spec.description in state
+
+async def test_an_over_long_message_is_cut_before_the_models_see_it(
+    brain, collect, jev, llm, script, team, message
+):
+    script()
+    paste = "Post about our Friday launch. " + "x" * (MAX_REQUEST_CHARS * 2)
+
+    events = await collect(brain.handle_message(message(team, paste)))
+
+    assert of(events, NeedsApproval)
+    plan = next(call for call in llm.calls if call.schema and call.schema.__name__ == "LeadPlan")
+    text = str(plan.messages)
+    assert "the rest of the message was too long" in text
+    assert len(text) < MAX_REQUEST_CHARS * 2
+
+def test_clip_request_keeps_short_messages():
+    assert clip_request("Post about Friday") == "Post about Friday"
+    clipped = clip_request("a" * (MAX_REQUEST_CHARS + 10))
+    assert len(clipped) == MAX_REQUEST_CHARS and clipped.endswith(CUT)
 
 async def test_routing_uses_route_threshold(brain, collect, deps, jev, script, team, message):
     script()
