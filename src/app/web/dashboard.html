@@ -1,0 +1,1217 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="robots" content="noindex">
+<title>Tenure</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:opsz,wght@12..96,500;12..96,700&family=JetBrains+Mono:wght@400;500&family=Public+Sans:wght@400;500;600&display=swap">
+<style>
+:root {
+  --bg: #f3f5f3; --surface: #ffffff; --sunk: #eaeeeb; --ink: #16201c; --muted: #5a6862; --line: #d8dfdb;
+  --accent: #2f5d50; --accent-ink: #ffffff; --accent-soft: #e2ece8;
+  --wait: #a8660b; --wait-soft: #fbf0dc; --ok: #2d7a46; --ok-soft: #e1f2e6;
+  --bad: #b03a2e; --bad-soft: #f8e3e0; --auto: #3b5bb5; --auto-soft: #e3e9f8;
+  --toast-bg: #16201c; --toast-ink: #ffffff;
+  --add: #1f6f3d; --add-bg: #d9f2e1; --del: #9b2c22; --del-bg: #f8dcd8; --sky: #1083fe;
+  --font-display: "Bricolage Grotesque", "Avenir Next", "Segoe UI", sans-serif;
+  --font-body: "Public Sans", "Segoe UI", system-ui, sans-serif;
+  --font-mono: "JetBrains Mono", ui-monospace, Menlo, monospace;
+  color-scheme: light;
+}
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg: #0f1513; --surface: #161e1b; --sunk: #1c2622; --ink: #e4ebe7; --muted: #93a29b; --line: #2a3632;
+    --accent: #7cc4ae; --accent-ink: #0f1513; --accent-soft: #1d332c;
+    --wait: #e9b25a; --wait-soft: #33281a; --ok: #74c98f; --ok-soft: #1a2e21;
+    --bad: #ec8a7e; --bad-soft: #36201d; --auto: #93aef0; --auto-soft: #1d2640;
+    --toast-bg: #e4ebe7; --toast-ink: #0f1513;
+    --add: #8fe0a8; --add-bg: #1a3324; --del: #f2a197; --del-bg: #3a201c; --sky: #4aa3ff;
+    color-scheme: dark;
+  }
+}
+* { box-sizing: border-box; }
+body { margin: 0; background: var(--bg); color: var(--ink); font-family: var(--font-body); font-size: 14.5px; line-height: 1.5; padding-inline: 16px; padding-block: 0 56px; }
+.wrap { max-width: 1240px; margin: 0 auto; display: grid; gap: 20px; }
+button, select { font: inherit; color: inherit; cursor: pointer; }
+button:focus-visible, textarea:focus-visible, a:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+button[disabled] { cursor: not-allowed; opacity: 0.6; }
+h1, h2, h3 { font-family: var(--font-display); margin: 0; text-wrap: balance; }
+.mono { font-family: var(--font-mono); font-variant-numeric: tabular-nums; }
+.sub { color: var(--muted); font-size: 13px; }
+[hidden] { display: none !important; }
+
+.top { display: flex; flex-wrap: wrap; align-items: center; gap: 12px 20px; padding-block: 14px; border-bottom: 1px solid var(--line); }
+.brand { font-family: var(--font-display); font-weight: 700; font-size: 20px; letter-spacing: -0.01em; }
+.brand span { color: var(--accent); }
+.biz h1 { font-size: 22px; font-weight: 700; line-height: 1.15; }
+.top .spacer { flex: 1; }
+.live { display: inline-flex; align-items: center; gap: 8px; font-size: 12.5px; color: var(--muted); }
+.live i { width: 8px; height: 8px; border-radius: 50%; background: var(--ok); box-shadow: 0 0 0 3px var(--ok-soft); }
+.live.down i { background: var(--bad); box-shadow: 0 0 0 3px var(--bad-soft); }
+.btn { border: 1px solid var(--line); background: var(--surface); border-radius: 8px; padding: 7px 12px; font-weight: 500; font-size: 13.5px; }
+.btn:hover:not([disabled]) { border-color: var(--muted); }
+.btn.primary { background: var(--accent); color: var(--accent-ink); border-color: var(--accent); }
+.btn.small { padding: 4px 9px; font-size: 12.5px; }
+.btn.quiet { border-color: transparent; background: transparent; color: var(--muted); }
+.btn.quiet:hover:not([disabled]) { color: var(--ink); background: var(--sunk); }
+.btn.danger { color: var(--bad); }
+.btn.working { display: inline-flex; align-items: center; gap: 7px; opacity: 1; }
+.spin { display: inline-block; width: 12px; height: 12px; border-radius: 50%; border: 2px solid currentColor; border-right-color: transparent; animation: spin 0.7s linear infinite; flex: none; }
+@keyframes spin { to { transform: rotate(360deg); } }
+@media (prefers-reduced-motion: reduce) { .spin { animation-duration: 2.4s; } }
+.rbody { display: grid; gap: 12px; transition: opacity 0.2s; }
+.review.busy .rbody { opacity: 0.55; }
+.slow { font-size: 12.5px; color: var(--muted); }
+.slow:empty { display: none; }
+.share { display: flex; height: 8px; border-radius: 4px; overflow: hidden; background: var(--sunk); }
+.share i { display: block; height: 100%; }
+.legend { display: flex; flex-wrap: wrap; gap: 4px 14px; font-size: 12px; color: var(--muted); }
+.legend span { display: inline-flex; align-items: center; gap: 6px; }
+.legend i { width: 9px; height: 9px; border-radius: 2px; display: inline-block; }
+.m0 { background: var(--accent); } .m1 { background: var(--auto); } .m2 { background: var(--wait); } .m3 { background: var(--ok); } .m4 { background: var(--muted); }
+td .id { display: block; font-family: var(--font-mono); font-size: 11.5px; color: var(--muted); overflow-wrap: anywhere; }
+tr.total td { border-top: 2px solid var(--line); font-weight: 600; }
+
+.nav { display: flex; gap: 2px; overflow-x: auto; border-bottom: 1px solid var(--line); margin-top: -20px; scrollbar-width: none; }
+.nav::-webkit-scrollbar { display: none; }
+.navtab { border: 0; background: none; padding: 11px 12px 10px; font-weight: 500; color: var(--muted); border-bottom: 2px solid transparent; white-space: nowrap; display: inline-flex; gap: 6px; align-items: center; }
+.navtab:hover { color: var(--ink); }
+.navtab[aria-selected="true"] { color: var(--ink); border-bottom-color: var(--accent); }
+.navtab:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
+.count { background: var(--wait-soft); color: var(--wait); border-radius: 999px; font-size: 11.5px; padding: 0 7px; font-weight: 600; font-variant-numeric: tabular-nums; }
+.page, .stack { display: grid; gap: 20px; min-width: 0; }
+.home-grid { display: grid; grid-template-columns: minmax(0, 1fr); gap: 20px; align-items: start; }
+@media (min-width: 860px) { .home-grid { grid-template-columns: minmax(0, 1.3fr) minmax(0, 1fr); } }
+.panel-head .more { margin-left: auto; color: var(--accent); font-size: 13px; font-weight: 500; text-decoration: none; }
+.panel-head .more:hover { text-decoration: underline; }
+.needs { display: grid; gap: 8px; }
+.need { display: flex; gap: 12px; align-items: center; padding: 10px 12px; border: 1px solid var(--line); border-radius: 10px; min-width: 0; }
+.need .txt { min-width: 0; display: grid; }
+.need .txt b { font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.need .go { margin-left: auto; flex: none; }
+.nums { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 10px; }
+.stat { display: grid; gap: 2px; min-width: 0; }
+.stat b { font-family: var(--font-display); font-size: 26px; font-weight: 700; font-variant-numeric: tabular-nums; line-height: 1.2; }
+.feed { display: grid; gap: 10px; margin: 0; padding: 0; list-style: none; }
+.feed li { display: flex; gap: 10px; align-items: center; font-size: 13.5px; min-width: 0; }
+.feed li > div { min-width: 0; overflow-wrap: anywhere; }
+.feed .when { color: var(--muted); font-size: 12px; }
+.thumb { width: 44px; height: 44px; border-radius: 8px; flex: none; object-fit: cover; background: var(--sunk); display: block; }
+.thumb.sm { width: 32px; height: 32px; border-radius: 6px; }
+.dot { width: 32px; height: 32px; border-radius: 6px; flex: none; background: var(--accent-soft); color: var(--accent); display: grid; place-items: center; font-size: 15px; }
+.imgs { display: grid; grid-template-columns: repeat(auto-fill, minmax(130px, 1fr)); gap: 10px; }
+.imgcard { border: 1px solid var(--line); border-radius: 10px; overflow: hidden; display: grid; background: var(--surface); min-width: 0; }
+.imgcard img { width: 100%; aspect-ratio: 1; object-fit: cover; display: block; background: var(--sunk); border-bottom: 1px solid var(--line); }
+.imgcard .foot { padding: 7px 8px; display: grid; gap: 6px; font-size: 12px; color: var(--muted); }
+.imgcard .foot span { overflow-wrap: anywhere; }
+.img-actions { display: flex; flex-wrap: wrap; gap: 6px; }
+.imgcard.removed img { opacity: 0.3; }
+.imgcard.removed .foot span { text-decoration: line-through; }
+#schedules, #spend, #log, #lessons, #teams { min-width: 0; }
+.sched-what b { display: block; font-weight: 600; }
+.sched-actions { display: flex; flex-wrap: wrap; gap: 6px; justify-content: flex-end; }
+.panel { background: var(--surface); border: 1px solid var(--line); border-radius: 12px; padding: 16px 18px; display: grid; gap: 14px; min-width: 0; }
+.panel-head { display: flex; flex-wrap: wrap; align-items: baseline; gap: 6px 12px; }
+.panel-head h2 { font-size: 17px; font-weight: 700; }
+.label { font-size: 11.5px; letter-spacing: 0.06em; text-transform: uppercase; color: var(--muted); font-weight: 600; }
+.empty { color: var(--muted); margin: 0; font-size: 13.5px; }
+
+.team { display: grid; gap: 10px; }
+.team + .team { border-top: 1px solid var(--line); padding-top: 14px; }
+.team-head { display: flex; flex-wrap: wrap; gap: 10px 16px; align-items: center; }
+.team-head h3 { font-size: 16px; }
+.people { display: flex; flex-wrap: wrap; gap: 6px 14px; }
+.person { display: flex; align-items: center; gap: 8px; font-size: 13.5px; }
+.ava { position: relative; overflow: hidden; width: 30px; height: 30px; border-radius: 50%; display: grid; place-items: center; font-weight: 600; font-size: 12.5px; color: var(--accent-ink); background: var(--accent); flex: none; }
+.ava img { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; }
+.ava.lg { width: 44px; height: 44px; font-size: 16px; border-radius: 8px; }
+.ava.sm { width: 22px; height: 22px; font-size: 10.5px; }
+.ava.all { background: var(--auto-soft); color: var(--auto); }
+.ava.s1 { background: var(--auto); }
+.ava.s2 { background: var(--wait); }
+.person small { color: var(--muted); display: block; font-size: 12px; line-height: 1.2; }
+.badge { font-size: 11.5px; border-radius: 999px; padding: 1px 8px; background: var(--sunk); color: var(--muted); font-family: var(--font-body); font-weight: 500; }
+.trust { border-top: 1px solid var(--line); }
+.trust-row { display: grid; grid-template-columns: minmax(130px, 200px) minmax(0, 1fr) 128px; gap: 10px 24px; align-items: center; padding-block: 12px; border-bottom: 1px solid var(--line); }
+.tt-actions { display: flex; flex-wrap: wrap; align-items: center; justify-content: flex-end; gap: 6px 8px; font-size: 12.5px; color: var(--muted); text-align: right; }
+@media (max-width: 640px) { .trust-row { grid-template-columns: minmax(0, 1fr); } .tt-actions { justify-content: flex-start; text-align: left; } }
+.tt-name { font-weight: 600; }
+.ladder { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 4px; }
+.rung { display: grid; gap: 4px; min-width: 0; }
+.rung .bar { height: 6px; border-radius: 3px; background: var(--sunk); }
+.rung.on .bar { background: var(--accent); }
+.rung span { font-size: 11px; color: var(--muted); line-height: 1.2; overflow-wrap: anywhere; }
+.rung.now span { color: var(--ink); font-weight: 600; }
+.streak { display: flex; align-items: center; gap: 8px; font-size: 12.5px; color: var(--muted); margin-top: 6px; flex-wrap: wrap; }
+.pips { display: inline-flex; gap: 3px; }
+.pips i { width: 9px; height: 9px; border-radius: 50%; border: 1.5px solid var(--accent); }
+.pips i.f { background: var(--accent); }
+.threshold { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 12px; font-size: 13px; color: var(--muted); }
+.stepper { display: inline-flex; align-items: center; border: 1px solid var(--line); border-radius: 8px; overflow: hidden; }
+.stepper button { border: 0; background: var(--sunk); width: 28px; height: 28px; }
+.stepper output { min-width: 34px; text-align: center; font-family: var(--font-mono); color: var(--ink); }
+
+.pill { display: inline-flex; align-items: center; gap: 5px; font-size: 12px; font-weight: 600; border-radius: 999px; padding: 2px 9px; white-space: nowrap; }
+.pill.waiting_approval, .pill.wait { background: var(--wait-soft); color: var(--wait); }
+.pill.done, .pill.ok { background: var(--ok-soft); color: var(--ok); }
+.pill.rejected, .pill.failed, .pill.bad { background: var(--bad-soft); color: var(--bad); }
+.pill.auto { background: var(--auto-soft); color: var(--auto); }
+.pill.in_progress, .pill.planned { background: var(--accent-soft); color: var(--accent); }
+.pill.neutral { background: var(--sunk); color: var(--muted); }
+
+textarea { width: 100%; min-height: 64px; font: 14px var(--font-body); color: var(--ink); background: var(--bg); border: 1px solid var(--line); border-radius: 8px; padding: 8px 10px; resize: vertical; }
+
+.table-wrap { overflow-x: auto; }
+table { width: 100%; border-collapse: collapse; font-size: 13.5px; min-width: 560px; }
+th { text-align: left; font-size: 11.5px; letter-spacing: 0.05em; text-transform: uppercase; color: var(--muted); font-weight: 600; padding: 6px 4px; border-bottom: 1px solid var(--line); }
+td { padding: 9px 4px; border-bottom: 1px solid var(--line); vertical-align: top; }
+td.num, th.num { text-align: right; font-family: var(--font-mono); font-variant-numeric: tabular-nums; }
+td small { color: var(--muted); }
+tr:last-child td { border-bottom: 0; }
+
+.lesson { display: grid; grid-template-columns: 22px minmax(0, 1fr) auto; gap: 4px 10px; padding: 9px 0; border-bottom: 1px solid var(--line); align-items: start; }
+.lesson .ava { margin-top: 1px; }
+.lesson:last-child { border-bottom: 0; }
+.lesson p { margin: 0; font-weight: 500; overflow-wrap: anywhere; }
+.lesson .meta { grid-column: 2; display: flex; flex-wrap: wrap; gap: 4px 8px; font-size: 12px; color: var(--muted); }
+.lesson .meta .all { color: var(--auto); font-weight: 600; }
+
+.entry { display: grid; grid-template-columns: 64px minmax(0, 1fr) auto; gap: 10px; padding: 9px 0; border-bottom: 1px solid var(--line); }
+.entry .pics { display: flex; gap: 4px; margin-top: 2px; }
+.tpl .people { gap: 6px; }
+.entry:last-child { border-bottom: 0; }
+.entry time { font-family: var(--font-mono); font-size: 12px; color: var(--muted); padding-top: 2px; }
+.entry .what { display: grid; gap: 3px; min-width: 0; }
+.entry .what b { font-weight: 600; overflow-wrap: anywhere; }
+.entry .what b.undone { text-decoration: line-through; color: var(--muted); }
+.tags { display: flex; flex-wrap: wrap; gap: 4px 6px; }
+.entry a { color: var(--accent); font-size: 12.5px; }
+
+dialog { border: 1px solid var(--line); border-radius: 14px; padding: 0; background: var(--surface); color: var(--ink); width: min(560px, calc(100% - 32px)); }
+dialog::backdrop { background: rgba(10, 16, 14, 0.45); }
+.dlg { padding: 18px; display: grid; gap: 14px; }
+.dlg-head { display: flex; align-items: center; gap: 10px; }
+.dlg-head h2 { font-size: 19px; }
+.dlg-head .btn { margin-left: auto; }
+.templates { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 10px; }
+.tpl { border: 1px solid var(--line); border-radius: 10px; padding: 12px; display: grid; gap: 8px; align-content: start; }
+.tpl h3 { font-size: 16px; }
+.tpl p { margin: 0; color: var(--muted); font-size: 13px; }
+
+.toast { position: fixed; left: 50%; bottom: 20px; transform: translateX(-50%); background: var(--toast-bg); color: var(--toast-ink); padding: 10px 16px; border-radius: 10px; font-size: 13.5px; max-width: calc(100% - 32px); z-index: 10; }
+.toast.error { background: var(--bad); color: #ffffff; }
+kbd { font-family: var(--font-mono); font-size: 11.5px; border: 1px solid var(--line); border-bottom-width: 2px; border-radius: 4px; padding: 0 5px; background: var(--surface); }
+.keys { font-size: 12px; color: var(--muted); display: flex; flex-wrap: wrap; gap: 4px 12px; margin-left: auto; }
+.inbox { display: grid; grid-template-columns: minmax(0, 1fr); gap: 14px; }
+@media (min-width: 920px) { .inbox { grid-template-columns: 300px minmax(0, 1fr); align-items: start; } }
+.list { display: grid; gap: 6px; align-content: start; }
+.item { text-align: left; border: 1px solid var(--line); border-radius: 10px; padding: 10px 12px; background: var(--surface); display: grid; grid-template-columns: minmax(0, 1fr); gap: 4px; width: 100%; }
+.item.pic { grid-template-columns: 44px minmax(0, 1fr); column-gap: 10px; }
+.item.pic .thumb { grid-row: span 2; }
+.item:hover { border-color: var(--muted); }
+.item.sel { border-color: var(--accent); box-shadow: inset 3px 0 0 var(--accent); background: var(--accent-soft); }
+.item .t { font-weight: 600; overflow-wrap: anywhere; }
+.item .meta { display: flex; flex-wrap: wrap; gap: 4px 8px; font-size: 12px; color: var(--muted); align-items: center; }
+.review { border: 1px solid var(--line); border-radius: 12px; padding: 16px; display: grid; gap: 14px; min-width: 0; }
+.review-head { display: flex; flex-wrap: wrap; gap: 6px 12px; align-items: baseline; }
+.review-head h3 { font-size: 18px; overflow-wrap: anywhere; }
+.asked { background: var(--sunk); border-radius: 8px; padding: 8px 12px; font-size: 13.5px; overflow-wrap: anywhere; }
+.asked b { font-weight: 600; }
+.steps { display: flex; flex-wrap: wrap; gap: 6px 14px; font-size: 12.5px; color: var(--muted); }
+.steps span::before { content: "✓ "; color: var(--ok); }
+.check { display: flex; align-items: center; gap: 10px; font-size: 12.5px; color: var(--muted); }
+.meter { width: 120px; height: 6px; border-radius: 3px; background: var(--sunk); overflow: hidden; }
+.meter i { display: block; height: 100%; background: var(--ok); }
+.tabs { display: flex; gap: 4px; border-bottom: 1px solid var(--line); }
+.tab { border: 0; background: none; padding: 6px 12px; border-bottom: 2px solid transparent; color: var(--muted); font-weight: 500; }
+.tab.on { color: var(--ink); border-bottom-color: var(--accent); }
+.sky { border: 1px solid var(--line); border-radius: 12px; padding: 12px 14px; display: grid; grid-template-columns: 40px minmax(0, 1fr); gap: 10px; max-width: 560px; }
+.sky .avatar { width: 40px; height: 40px; border-radius: 50%; background: var(--sky); color: #fff; display: grid; place-items: center; font-weight: 700; }
+.sky .who span { color: var(--muted); }
+.sky .body { white-space: pre-wrap; overflow-wrap: anywhere; font-size: 15px; margin-top: 2px; }
+.sky .body .link, .sky .body .tag { color: var(--sky); }
+.plain { white-space: pre-wrap; overflow-wrap: anywhere; background: var(--sunk); border-radius: 8px; padding: 10px 12px; }
+.mailhead { display: grid; grid-template-columns: 70px minmax(0, 1fr); gap: 6px 10px; align-items: center; font-size: 13.5px; }
+.mailhead label { color: var(--muted); }
+.mailhead input { border: 1px solid var(--line); border-radius: 6px; padding: 6px 8px; background: var(--bg); color: var(--ink); width: 100%; min-width: 0; font: inherit; }
+.mailpreview { border: 1px solid var(--line); border-radius: 10px; padding: 14px 16px; line-height: 1.55; overflow-wrap: anywhere; }
+.mailpreview p { margin: 0 0 10px; }
+.mailpreview .link { color: var(--accent); }
+.editor { min-height: 140px; font-size: 14.5px; line-height: 1.5; }
+.editor.email { min-height: 220px; }
+.counter { display: flex; align-items: center; gap: 10px; font-size: 12.5px; color: var(--muted); flex-wrap: wrap; }
+.counter .bar { flex: 0 0 140px; height: 6px; border-radius: 3px; background: var(--sunk); overflow: hidden; }
+.counter .bar i { display: block; height: 100%; background: var(--ok); }
+.counter.near .bar i { background: var(--wait); }
+.counter.over { color: var(--bad); font-weight: 600; }
+.counter.over .bar i { background: var(--bad); }
+.diff { line-height: 1.7; white-space: pre-wrap; overflow-wrap: anywhere; border: 1px dashed var(--line); border-radius: 8px; padding: 10px 12px; }
+.diff ins { text-decoration: none; background: var(--add-bg); color: var(--add); border-radius: 3px; padding: 0 2px; }
+.diff del { background: var(--del-bg); color: var(--del); border-radius: 3px; padding: 0 2px; }
+.rules summary { cursor: pointer; font-size: 13px; color: var(--muted); }
+.chips { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 6px; }
+.chip { font-size: 12.5px; border: 1px solid var(--line); border-radius: 999px; padding: 3px 10px; background: var(--surface); }
+.chip.rule { background: var(--sunk); border-color: transparent; }
+.chip.pick { cursor: pointer; }
+.chip.pick[aria-pressed="true"] { background: var(--bad-soft); color: var(--bad); border-color: var(--bad); }
+.consequence { font-size: 13px; color: var(--muted); }
+.consequence b { color: var(--ink); font-weight: 600; }
+.actions { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; border-top: 1px solid var(--line); padding-top: 12px; }
+.actions .spacer, .sendtime .spacer { flex: 1; }
+.rejectbox { border: 1px solid var(--bad); border-radius: 10px; padding: 12px; display: grid; gap: 10px; background: var(--bad-soft); }
+.rejectbox.redraw { background: var(--sunk); border-color: var(--line); }
+.sendtime { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 10px; font-size: 13.5px; padding: 10px 12px; border: 1px solid var(--line); border-radius: 10px; background: var(--sunk); }
+.sendtime.held { border-color: var(--ok); background: var(--ok-soft); color: var(--ok); }
+.sendtime b { font-weight: 600; }
+.sendtime input { font: inherit; border: 1px solid var(--line); border-radius: 8px; padding: 5px 8px; background: var(--surface); color: var(--ink); }
+.rejectbox textarea { background: var(--surface); }
+.btn.danger.outline { border-color: var(--bad); background: transparent; }
+.notice { padding: 40px 0; text-align: center; color: var(--muted); }
+.login { min-height: 100vh; display: grid; place-items: center; padding-block: 24px; }
+.login-card { width: min(380px, 100%); background: var(--surface); border: 1px solid var(--line); border-radius: 14px; padding: 24px; display: grid; gap: 12px; }
+.login-card .brand { font-size: 24px; }
+.login-card h1 { font-size: 19px; }
+.login-card p { margin: 0; color: var(--muted); font-size: 13.5px; }
+.login-card input { font: 15px var(--font-mono); letter-spacing: 0.04em; padding: 10px 12px; border: 1px solid var(--line); border-radius: 8px; background: var(--bg); color: var(--ink); width: 100%; }
+.login-card input[aria-invalid="true"] { border-color: var(--bad); }
+.login-card .err { color: var(--bad); font-size: 13px; min-height: 1.2em; }
+</style>
+</head>
+<body>
+<main class="login" id="login" hidden>
+  <form class="login-card" id="login-form" novalidate>
+    <div class="brand">ten<span>ure</span></div>
+    <h1>Enter your dashboard password</h1>
+    <p>You'll find it in your Telegram group. Send <b>/dashboard</b> there to get a new one.</p>
+    <label class="label" for="login-pw">Password</label>
+    <input id="login-pw" name="password" autocomplete="current-password" placeholder="xxxx-xxxx-xxxx" spellcheck="false" autocapitalize="off">
+    <div class="err" id="login-err" aria-live="polite"></div>
+    <button class="btn primary" type="submit" id="login-go">Open dashboard</button>
+  </form>
+</main>
+<p class="notice" id="gone" hidden>This dashboard link isn't valid or was turned off. Send /dashboard in your Telegram group for a new one.</p>
+<div class="wrap" id="app" hidden>
+  <header class="top">
+    <div class="brand">ten<span>ure</span></div>
+    <div class="biz"><h1 id="biz-name">Loading…</h1></div>
+    <div class="spacer"></div>
+    <span class="live" id="live"><i></i><span id="live-text">Connecting…</span></span>
+    <button class="btn primary" id="open-hire" type="button">Hire a team</button>
+    <button class="btn quiet" id="logout" type="button">Log out</button>
+  </header>
+
+  <nav class="nav" role="tablist" aria-label="Dashboard" id="nav">
+    <button class="navtab" role="tab" id="t-home" aria-controls="p-home" data-page="home" type="button">Home</button>
+    <button class="navtab" role="tab" id="t-drafts" aria-controls="p-drafts" data-page="drafts" type="button">Drafts <span class="count" id="drafts-count" hidden></span></button>
+    <button class="navtab" role="tab" id="t-teams" aria-controls="p-teams" data-page="teams" type="button">Teams</button>
+    <button class="navtab" role="tab" id="t-schedules" aria-controls="p-schedules" data-page="schedules" type="button">Schedules</button>
+    <button class="navtab" role="tab" id="t-knowledge" aria-controls="p-knowledge" data-page="knowledge" type="button">Knowledge</button>
+    <button class="navtab" role="tab" id="t-activity" aria-controls="p-activity" data-page="activity" type="button">Activity</button>
+    <button class="navtab" role="tab" id="t-spend" aria-controls="p-spend" data-page="spend" type="button">Spend</button>
+  </nav>
+
+  <div class="page" role="tabpanel" id="p-home" aria-labelledby="t-home">
+    <div class="home-grid">
+      <section class="panel" aria-label="Needs you">
+        <div class="panel-head"><h2>Needs you</h2><a class="more" href="#drafts">All drafts →</a></div>
+        <div class="needs" id="needs"></div>
+      </section>
+      <div class="stack">
+        <section class="panel" aria-label="This week">
+          <div class="panel-head"><h2>This week</h2><a class="more" href="#spend">Spend →</a></div>
+          <div class="nums" id="week"></div>
+        </section>
+        <section class="panel" aria-label="Latest">
+          <div class="panel-head"><h2>Latest</h2><a class="more" href="#activity">Activity →</a></div>
+          <ul class="feed" id="latest"></ul>
+        </section>
+      </div>
+    </div>
+  </div>
+
+  <div class="page" role="tabpanel" id="p-drafts" aria-labelledby="t-drafts" hidden>
+    <section class="panel" aria-label="Waiting for you">
+      <div class="panel-head">
+        <h2>Waiting for you</h2>
+        <span class="sub" id="waiting-sub"></span>
+        <span class="keys"><span><kbd>A</kbd> approve</span><span><kbd>E</kbd> edit</span><span><kbd>R</kbd> reject</span><span><kbd>J</kbd>/<kbd>K</kbd> next, previous</span><span><kbd>Esc</kbd> leave the editor</span></span>
+      </div>
+      <div class="inbox" id="inbox">
+        <div class="list" id="list" role="listbox" aria-label="Drafts"></div>
+        <div id="review"></div>
+      </div>
+    </section>
+  </div>
+
+  <div class="page" role="tabpanel" id="p-teams" aria-labelledby="t-teams" hidden>
+    <section class="panel" aria-label="Teams">
+      <div class="panel-head"><h2>Teams</h2><span class="sub">Trust is earned per kind of task</span></div>
+      <div id="teams"></div>
+    </section>
+  </div>
+
+  <div class="page" role="tabpanel" id="p-schedules" aria-labelledby="t-schedules" hidden>
+    <section class="panel" aria-label="Schedules">
+      <div class="panel-head"><h2>Schedules</h2><span class="sub">Requests your teams repeat on their own. Drafts still wait for your OK unless the task has earned more trust.</span></div>
+      <div id="schedules"></div>
+    </section>
+  </div>
+
+  <div class="page" role="tabpanel" id="p-knowledge" aria-labelledby="t-knowledge" hidden>
+    <section class="panel" aria-label="What your team knows">
+      <div class="panel-head"><h2 id="lessons-title">What your teams know about you</h2><span class="sub">Used in every draft and check</span></div>
+      <div id="lessons"></div>
+    </section>
+  </div>
+
+  <div class="page" role="tabpanel" id="p-activity" aria-labelledby="t-activity" hidden>
+    <section class="panel" aria-label="Activity">
+      <div class="panel-head"><h2>Activity</h2><span class="sub">Every real action, as logged</span></div>
+      <div id="log"></div>
+    </section>
+    <section class="panel" aria-label="Tasks">
+      <div class="panel-head"><h2>Tasks</h2><span class="sub">Newest first</span></div>
+      <div class="table-wrap">
+        <table>
+          <thead><tr><th>Task</th><th>Type</th><th>Status</th><th class="num">Revisions</th><th class="num">Tokens</th><th class="num">Updated</th></tr></thead>
+          <tbody id="tasks"></tbody>
+        </table>
+      </div>
+    </section>
+  </div>
+
+  <div class="page" role="tabpanel" id="p-spend" aria-labelledby="t-spend" hidden>
+    <section class="panel" aria-label="Model spend this week">
+      <div class="panel-head"><h2>Model spend this week</h2><span class="sub">Every model call, with what OpenRouter billed</span></div>
+      <div id="spend"></div>
+    </section>
+  </div>
+</div>
+
+<dialog id="hire">
+  <div class="dlg">
+    <div class="dlg-head"><h2>Hire a team</h2><button class="btn quiet" id="close-hire" type="button">Close</button></div>
+    <p class="sub">A new team gets its own topic in your Telegram group and starts on probation: it asks before it acts.</p>
+    <div class="templates" id="templates"></div>
+  </div>
+</dialog>
+
+<script>
+const TOKEN = location.pathname.split("/")[2];
+const API = `/b/${TOKEN}/api`;
+const REFRESH_MS = 5000;
+const REASONS = ["Too salesy", "Wrong tone", "Facts are wrong", "Too long", "Not the right time"];
+const POST_LIMIT = 300;
+const PAGES = ["home", "drafts", "teams", "schedules", "knowledge", "activity", "spend"];
+const ui = {
+  lowering: null, busy: new Map(), selected: null, tab: "view", edits: {}, mail: {},
+  rejecting: null, picked: new Set(), reason: {}, removed: {}, page: "home", redrawing: null, imageReason: {}, timing: null,
+};
+let data = null;
+let clockOffset = 0;
+let lastLoad = 0;
+let failing = false;
+let failure = "";
+
+const $ = (id) => document.getElementById(id);
+const esc = (s) => String(s ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[c]);
+const fmtNum = (n) => Number(n).toLocaleString("en-US");
+const fmtTokens = (n) => (n >= 1000 ? `${(n / 1000).toFixed(1)}k` : String(n));
+const fileUrl = (id, thumb = true) => `${API}/files/${encodeURIComponent(id)}${thumb ? "?thumb=1" : ""}`;
+const thumbImg = (image, cls = "thumb") => `<img class="${cls}" src="${fileUrl(image.file_id)}" alt="${esc(image.alt)}" loading="lazy">`;
+function avatar(person, i = 0, cls = "") {
+  if (!person) return `<span class="ava all ${cls}" aria-hidden="true">All</span>`;
+  const img = person.avatar ? `<img src="${esc(person.avatar)}" alt="" onerror="this.remove()">` : "";
+  return `<span class="ava s${i % 3} ${cls}" aria-hidden="true">${esc((person.name || "?")[0])}${img}</span>`;
+}
+function fmtWhen(iso) {
+  if (!iso) return "–";
+  return new Date(iso).toLocaleString([], { weekday: "short", month: "short", day: "numeric", hour: "numeric", minute: "2-digit" });
+}
+
+function fmtTime(iso) {
+  const d = new Date(iso);
+  const now = new Date();
+  const time = d.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+  if (d.toDateString() === now.toDateString()) return time;
+  const days = (now - d) / 86400000;
+  if (days < 6) return d.toLocaleDateString([], { weekday: "short" });
+  return d.toLocaleDateString([], { month: "short", day: "numeric" });
+}
+
+let toastTimer;
+function toast(text, error = false) {
+  document.querySelectorAll(".toast").forEach((t) => t.remove());
+  const el = document.createElement("div");
+  el.className = error ? "toast error" : "toast";
+  el.setAttribute("role", "status");
+  el.textContent = text;
+  document.body.appendChild(el);
+  clearTimeout(toastTimer);
+  toastTimer = setTimeout(() => el.remove(), 3200);
+}
+
+async function post(path, body) {
+  const response = await fetch(`${API}${path}`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(body || {}),
+  });
+  const payload = await response.json().catch(() => ({}));
+  if (response.status === 401 && path !== "/login") { show("login"); }
+  if (!response.ok) throw new Error(payload.message || payload.detail || "That didn't work. Try again.");
+  return payload.message;
+}
+
+async function act(key, path, body, doing = {}) {
+  if (ui.busy.has(key)) return false;
+  ui.busy.set(key, { ...doing, since: Date.now() });
+  render();
+  if (key === ui.selected) renderReview();
+  let ok = false;
+  try {
+    toast(await post(path, body));
+    ok = true;
+    ui.lowering = null;
+    if (key === ui.rejecting) { ui.rejecting = null; ui.picked.clear(); }
+    if (key in ui.edits || key in ui.mail || key in ui.removed) { delete ui.edits[key]; delete ui.mail[key]; delete ui.removed[key]; }
+    if (key === ui.selected) { ui.tab = "view"; ui.selected = null; }
+  } catch (error) {
+    toast(error.message, true);
+  } finally {
+    ui.busy.delete(key);
+    await load();
+    if (data && key === ui.selected) renderReview();
+  }
+  return ok;
+}
+
+const SLOW_MS = 3000;
+function busyLabel(key, kind, text) {
+  const doing = ui.busy.get(key);
+  return doing && doing.kind === kind ? `<span class="spin" aria-hidden="true"></span>${esc(doing.label)}` : text;
+}
+const workingClass = (key, kind) => (ui.busy.get(key)?.kind === kind ? "working" : "");
+function slowText(key) {
+  const doing = ui.busy.get(key);
+  return doing && doing.slow && Date.now() - doing.since >= SLOW_MS ? doing.slow : "";
+}
+function tickSlow() {
+  const el = document.querySelector("#review .slow");
+  if (el) el.textContent = slowText(el.dataset.key);
+}
+
+function renderHome() {
+  const drafts = data.drafts;
+  $("drafts-count").hidden = !drafts.length;
+  $("drafts-count").textContent = drafts.length;
+  $("needs").innerHTML = drafts.length ? drafts.slice(0, 4).map((d) => {
+    const pic = d.images.length ? thumbImg(d.images[0]) : avatar({ name: d.lead, avatar: d.lead_avatar }, 0, "lg");
+    const images = d.images.length ? ` · ${d.images.length} image${d.images.length > 1 ? "s" : ""}` : "";
+    return `
+      <div class="need">${pic}
+        <div class="txt"><b>${esc(d.type)} · ${esc(d.title)}</b><span class="sub">${esc(d.lead)}${images} · check ${d.check}%</span></div>
+        <button class="btn small go ${d === drafts[0] ? "primary" : ""}" type="button" data-review="${esc(d.approval_id)}">Review</button>
+      </div>`;
+  }).join("") + (drafts.length > 4 ? `<a class="sub" href="#drafts">${drafts.length - 4} more in Drafts</a>` : "")
+    : `<p class="empty">Nothing needs you right now. New drafts show up here and in Telegram.</p>`;
+  const s = data.stats;
+  $("week").innerHTML = `
+    <div class="stat"><b>${s.done_week}</b><span class="sub">tasks done</span></div>
+    <div class="stat"><b>${s.actions_week}</b><span class="sub">posts and emails out</span></div>
+    <div class="stat"><b class="mono">${s.billed_week === null ? "–" : `$${s.billed_week.toFixed(2)}`}</b><span class="sub">models billed</span></div>`;
+  const latest = data.activity.slice(0, 3);
+  $("latest").innerHTML = latest.length ? latest.map((a) => `
+    <li>${a.images.length ? thumbImg(a.images[0], "thumb sm") : `<span class="dot" aria-hidden="true">${a.ok ? "✓" : "!"}</span>`}
+      <div>${esc(a.summary)}${a.images.length ? ` · ${a.images.length} image${a.images.length > 1 ? "s" : ""}` : ""}<div class="when">${esc(fmtTime(a.at))} · ${a.autonomous ? "on its own" : "approved by you"}</div></div></li>`).join("")
+    : `<li class="empty">Nothing went out yet this week.</li>`;
+}
+
+function renderTeams() {
+  if (!data.teams.length) {
+    $("teams").innerHTML = `<p class="empty">No teams yet. Use “Hire a team” to get started.</p>`;
+    return;
+  }
+  const threshold = (team) => {
+    const n = team.promote_after;
+    const busy = ui.busy.has(`threshold:${team.team_id}`) ? "disabled" : "";
+    return `
+    <div class="threshold">
+      <span>Offer more autonomy after</span>
+      <span class="stepper">
+        <button type="button" data-act="threshold" data-team="${esc(team.team_id)}" data-value="${n - 1}" aria-label="Fewer approvals" ${n <= 1 || busy ? "disabled" : ""}>−</button><output>${busy ? `<span class="spin" aria-label="Saving"></span>` : n}</output><button type="button" data-act="threshold" data-team="${esc(team.team_id)}" data-value="${n + 1}" aria-label="More approvals" ${n >= data.promote_after_max || busy ? "disabled" : ""}>+</button>
+      </span>
+      <span>approval${n === 1 ? "" : "s"} in a row without edits</span>
+    </div>`;
+  };
+  $("teams").innerHTML = data.teams.map((team) => `
+    <div class="team">
+      <div class="team-head">
+        <h3>${esc(team.name)} <span class="badge">hired ${esc(fmtTime(team.hired_at))}</span>${team.onboarded ? "" : ' <span class="badge">getting to know you</span>'}</h3>
+        <div class="people">${team.people.map((p, i) => `
+          <div class="person">${avatar(p, i)}<div>${esc(p.name)}<small>${esc(p.role)}</small></div></div>`).join("")}</div>
+      </div>
+      <div class="trust">${team.trust.map((t) => trustRow(team, t)).join("")}</div>
+      ${threshold(team)}
+    </div>`).join("");
+}
+
+function trustRow(team, t) {
+  const key = `${team.team_id}:${t.task_type}`;
+  const rungs = data.levels.map((name, n) => `<div class="rung ${n <= t.level ? "on" : ""} ${n === t.level ? "now" : ""}"><div class="bar"></div><span>${esc(name)}</span></div>`).join("");
+  const max = t.promote_after;
+  const filled = Math.min(t.streak, max);
+  const pips = Array.from({ length: max }, (_, n) => `<i class="${n < filled ? "f" : ""}"></i>`).join("");
+  const lead = team.people[0] ? team.people[0].name : "The team";
+  const streak = t.level < data.levels.length - 1
+    ? `<div class="streak"><span class="pips" aria-hidden="true">${pips}</span><span class="mono">${filled}/${max}</span> approvals in a row before ${esc(lead)} asks for more</div>`
+    : `<div class="streak">Highest level</div>`;
+  let actions = "";
+  if (ui.lowering === key) {
+    actions = `Lower to ${esc(data.levels[t.level - 1])}?
+      <button class="btn small danger ${workingClass(key, "lower")}" data-act="lower-yes" data-team="${esc(team.team_id)}" data-type="${esc(t.task_type)}" type="button" ${ui.busy.has(key) ? "disabled" : ""}>${busyLabel(key, "lower", "Lower")}</button>
+      <button class="btn small quiet" data-act="lower-no" type="button" ${ui.busy.has(key) ? "disabled" : ""}>Cancel</button>`;
+  } else if (t.level > 0) {
+    actions = `<button class="btn small" data-act="lower" data-key="${esc(key)}" type="button">Lower</button>`;
+  }
+  return `
+    <div class="trust-row">
+      <div class="tt-name">${esc(t.label)}</div>
+      <div><div class="ladder">${rungs}</div>${streak}</div>
+      <div class="tt-actions">${actions}</div>
+    </div>`;
+}
+
+const chars = (text) => [...text].length;
+const linkify = (text) => esc(text)
+  .replace(/(https?:\/\/[^\s<]+)/g, '<span class="link">$1</span>')
+  .replace(/(^|\s)(#[A-Za-z]\w*)/g, '$1<span class="tag">$2</span>');
+function markdown(body) {
+  const inline = (line) => esc(line)
+    .replace(/\*\*(.+?)\*\*/g, "<strong>$1</strong>")
+    .replace(/(https?:\/\/[^\s<]+)/g, '<span class="link">$1</span>');
+  return body.trim().split(/\n\s*\n/).map((block) => {
+    const lines = block.split("\n");
+    if (lines.every((l) => /^\s*[-*]\s+/.test(l))) return `<ul>${lines.map((l) => `<li>${inline(l.replace(/^\s*[-*]\s+/, ""))}</li>`).join("")}</ul>`;
+    return `<p>${lines.map(inline).join("<br>")}</p>`;
+  }).join("");
+}
+function diff(a, b) {
+  const x = a.split(/(\s+)/), y = b.split(/(\s+)/);
+  const n = x.length, m = y.length;
+  const dp = Array.from({ length: n + 1 }, () => new Array(m + 1).fill(0));
+  for (let i = n - 1; i >= 0; i--) for (let j = m - 1; j >= 0; j--)
+    dp[i][j] = x[i] === y[j] ? dp[i + 1][j + 1] + 1 : Math.max(dp[i + 1][j], dp[i][j + 1]);
+  let i = 0, j = 0, out = "";
+  while (i < n && j < m) {
+    if (x[i] === y[j]) { out += esc(x[i]); i++; j++; }
+    else if (dp[i + 1][j] >= dp[i][j + 1]) { out += `<del>${esc(x[i])}</del>`; i++; }
+    else { out += `<ins>${esc(y[j])}</ins>`; j++; }
+  }
+  while (i < n) out += `<del>${esc(x[i++])}</del>`;
+  while (j < m) out += `<ins>${esc(y[j++])}</ins>`;
+  return out;
+}
+
+const draftById = (id) => data.drafts.find((d) => d.approval_id === id);
+const currentDraft = () => (ui.selected ? draftById(ui.selected) : null);
+const textOf = (d) => ui.edits[d.approval_id] ?? d.text ?? "";
+const mailOf = (d) => ({ to: d.to, subject: d.subject, ...(ui.mail[d.approval_id] || {}) });
+const removedOf = (d) => ui.removed[d.approval_id] || new Set();
+const keptImages = (d) => d.images.filter((image) => !removedOf(d).has(image.file_id));
+function changed(d) {
+  const images = removedOf(d).size > 0;
+  if (d.kind === "post") return images || textOf(d) !== d.text;
+  if (d.kind === "email") {
+    const mail = mailOf(d);
+    return images || textOf(d) !== d.text || mail.to !== d.to || mail.subject !== d.subject;
+  }
+  return false;
+}
+
+function select(id) {
+  ui.selected = id; ui.tab = "view"; ui.rejecting = null; ui.redrawing = null; ui.timing = null; ui.picked.clear();
+  renderInbox(true);
+}
+function move(step) {
+  if (!data.drafts.length) return;
+  const ids = data.drafts.map((d) => d.approval_id);
+  const at = ids.indexOf(ui.selected);
+  select(ids[(at + step + ids.length) % ids.length]);
+}
+
+function renderInbox(force = false) {
+  const drafts = data.drafts;
+  $("waiting-sub").textContent = drafts.length ? `${drafts.length} draft${drafts.length > 1 ? "s" : ""} · decide here or in Telegram` : "";
+  if (ui.selected && !draftById(ui.selected)) {
+    if (ui.edits[ui.selected] !== undefined || ui.mail[ui.selected] || ui.removed[ui.selected]) toast("That draft was handled in Telegram, so your changes weren't used.", true);
+    delete ui.edits[ui.selected]; delete ui.mail[ui.selected]; delete ui.removed[ui.selected];
+    ui.selected = null; ui.tab = "view"; ui.rejecting = null;
+  }
+  if (!ui.selected && drafts.length) ui.selected = drafts[0].approval_id;
+  if (!drafts.length) {
+    $("list").innerHTML = "";
+    $("review").dataset.shows = "";
+    $("review").innerHTML = `<p class="empty">Nothing waiting. New drafts appear here as soon as a team finishes them.</p>`;
+    return;
+  }
+  $("list").innerHTML = drafts.map((d) => `
+    <button class="item ${d.images.length ? "pic" : ""} ${d.approval_id === ui.selected ? "sel" : ""}" type="button" role="option" aria-selected="${d.approval_id === ui.selected}" data-pick="${esc(d.approval_id)}">
+      ${d.images.length ? thumbImg(d.images[0]) : ""}
+      <span class="t">${esc(d.title)}</span>
+      <span class="meta">
+        <span>${esc(d.type)} · ${esc(d.team)}${d.images.length ? ` · ${d.images.length} image${d.images.length > 1 ? "s" : ""}` : ""}</span>
+        <span class="mono">check ${d.check}%</span>
+        ${d.revision ? `<span class="pill neutral">Revision ${d.revision} of 2</span>` : ""}
+        ${d.send ? `<span class="pill ${d.send.scheduled ? "ok" : "wait"}">${d.send.scheduled ? "Scheduled" : "⏰"} ${esc(d.send.local)}</span>` : ""}
+        ${ui.busy.has(d.approval_id) ? `<span class="pill in_progress">${busyLabel(d.approval_id, ui.busy.get(d.approval_id).kind, "")}</span>` : changed(d) ? `<span class="pill wait">Edited</span>` : `<span>${esc(fmtTime(d.created_at))}</span>`}
+      </span>
+    </button>`).join("");
+  const focused = $("review").contains(document.activeElement);
+  const stale = $("review").dataset.shows !== ui.selected;
+  if (force || stale || !focused) renderReview();
+}
+
+function sendTimeRow(d, busy) {
+  const place = esc((d.send || data.timezone).place);
+  if (ui.timing === d.approval_id) {
+    return `
+    <div class="sendtime">
+      <label for="send-at"><b>⏰ Goes out at</b></label>
+      <input type="datetime-local" id="send-at" value="${esc(d.send ? d.send.input : "")}" ${busy}>
+      <span class="sub">${place} time</span>
+      <span class="spacer"></span>
+      <button class="btn small primary ${workingClass(`time:${d.approval_id}`, "time")}" data-act="time-save" type="button" ${busy}>${busyLabel(`time:${d.approval_id}`, "time", "Save time")}</button>
+      <button class="btn small quiet" data-act="time-cancel" type="button">Cancel</button>
+    </div>`;
+  }
+  if (d.send && d.send.scheduled) {
+    return `<div class="sendtime held"><b>✓ Approved · ⏰ goes out ${esc(d.send.local)}</b><span>(${place} time)</span></div>`;
+  }
+  if (d.send) {
+    return `
+    <div class="sendtime">
+      <span><b>⏰ Goes out ${esc(d.send.local)}</b> (${place} time) once you approve</span>
+      <span class="spacer"></span>
+      <button class="btn small" data-act="time-open" type="button" ${busy}>Change time</button>
+      <button class="btn small quiet ${workingClass(`time:${d.approval_id}`, "clear")}" data-act="time-clear" type="button" ${busy}>${busyLabel(`time:${d.approval_id}`, "clear", "Send on approval")}</button>
+    </div>`;
+  }
+  return `
+    <div class="sendtime">
+      <span>Goes out as soon as you approve.</span>
+      <span class="spacer"></span>
+      <button class="btn small" data-act="time-open" type="button" ${busy}>⏰ Schedule</button>
+    </div>`;
+}
+
+function renderReview() {
+  const d = currentDraft();
+  $("review").dataset.shows = d ? d.approval_id : "";
+  if (!d) { $("review").innerHTML = ""; return; }
+  const id = d.approval_id;
+  const busy = ui.busy.has(id) ? "disabled" : "";
+  const text = textOf(d);
+  const isChanged = changed(d);
+  const count = chars(text);
+  const over = d.kind === "post" && count > POST_LIMIT;
+  const mail = mailOf(d);
+  const preview = d.kind === "post"
+    ? `<div class="sky"><div class="avatar">${esc((data.business.name || "?")[0])}</div><div><div class="who"><b>${esc(data.business.name)}</b> <span>· now</span></div><div class="body">${linkify(text)}</div></div></div>`
+    : d.kind === "email" ? `<div class="mailpreview">${markdown(text)}</div>` : `<div class="plain">${esc(d.preview)}</div>`;
+  const mailhead = d.kind === "email" ? `
+    <div class="mailhead">
+      <label for="mail-to">To</label><input id="mail-to" data-mail="to" value="${esc(mail.to)}" autocomplete="off" ${busy}>
+      <label for="mail-subject">Subject</label><input id="mail-subject" data-mail="subject" value="${esc(mail.subject)}" autocomplete="off" ${busy}>
+    </div>` : "";
+  const editable = d.kind === "post" || d.kind === "email";
+  const editor = `
+    <textarea class="editor ${d.kind === "email" ? "email" : ""}" id="editor" aria-label="Edit the draft" ${busy}>${esc(text)}</textarea>
+    ${d.kind === "post"
+      ? `<div class="counter ${over ? "over" : count > 280 ? "near" : ""}" id="counter"><span class="bar"><i style="width:${Math.min(100, count / 3)}%"></i></span><span class="mono">${count} / ${POST_LIMIT}</span>${over ? "<span>Too long for Bluesky</span>" : ""}</div>`
+      : `<div class="sub">Simple formatting works: **bold**, - lists, links.</div>`}`;
+  const showDiff = isChanged && text !== d.text;
+  if (ui.tab === "diff" && !showDiff) ui.tab = "view";
+  if (ui.tab === "edit" && !editable) ui.tab = "view";
+  const tabs = editable ? `
+    <div class="tabs" role="tablist">
+      <button class="tab ${ui.tab === "view" ? "on" : ""}" role="tab" data-tab="view" type="button">Preview</button>
+      <button class="tab ${ui.tab === "edit" ? "on" : ""}" role="tab" data-tab="edit" type="button">Edit${isChanged ? " ●" : ""}</button>
+      ${showDiff ? `<button class="tab ${ui.tab === "diff" ? "on" : ""}" role="tab" data-tab="diff" type="button">Your changes</button>` : ""}
+    </div>` : "";
+  const body = ui.tab === "edit" ? editor : ui.tab === "diff" ? `<div class="diff">${diff(d.text, text)}</div>` : preview;
+  const removable = editable && d.images.length > 0;
+  const left = Math.max(0, 2 - d.revision);
+  const where = d.kind === "email" ? "the first is the header, the rest go below the text" : d.kind === "post" ? "posted in this order" : "nothing gets posted";
+  const images = d.images.length ? `
+    <div class="label">Images · ${where}</div>
+    <div class="imgs">${d.images.map((image) => {
+      const gone = removedOf(d).has(image.file_id);
+      const remove = removable
+        ? `<button class="btn small ${gone ? "" : "danger"}" type="button" data-act="img-toggle" data-file="${esc(image.file_id)}" ${busy}>${gone ? "Put back" : "Remove"}</button>`
+        : "";
+      const redo = image.made && !gone
+        ? `<button class="btn small" type="button" data-act="new-image" ${busy || !left ? "disabled" : ""} title="${left ? "Keeps the text; makes one new image" : "No revisions left on this draft"}">↻ New image</button>`
+        : "";
+      const buttons = remove || redo ? `<div class="img-actions">${redo}${remove}</div>` : "";
+      return `<div class="imgcard ${gone ? "removed" : ""}"><a href="${fileUrl(image.file_id, false)}" target="_blank" rel="noopener"><img src="${fileUrl(image.file_id)}" alt="${esc(image.alt)}" loading="lazy"></a><div class="foot"><span>${esc(image.alt || "No description")}</span>${buttons}</div></div>`;
+    }).join("")}</div>
+    ${ui.redrawing === id ? `
+    <div class="rejectbox redraw">
+      <label class="sub" for="image-reason">What should change in the image? (optional)</label>
+      <textarea id="image-reason" placeholder="Warmer colours, no people…">${esc(ui.imageReason[id] || "")}</textarea>
+      <div class="actions" style="border:0;padding:0">
+        <button class="btn primary ${workingClass(id, "new-image")}" data-act="new-image-go" type="button" ${left && !busy ? "" : "disabled"}>${busyLabel(id, "new-image", "↻ Make a new image")}</button>
+        <button class="btn quiet" data-act="new-image-cancel" type="button" ${busy}>Cancel</button>
+        <span class="sub">${left ? `Keeps the text. Uses 1 of ${left} revision${left > 1 ? "s" : ""} left.` : "No revisions left on this draft."}</span>
+      </div>
+    </div>` : ""}` : "";
+  const rules = d.rules.length ? `
+    <details class="rules"><summary>${esc(d.lead)} followed ${d.rules.length} rule${d.rules.length > 1 ? "s" : ""} for this</summary>
+      <div class="chips">${d.rules.map((r) => `<span class="chip rule">${esc(r)}</span>`).join("")}</div></details>` : "";
+  const when = d.send ? `at ${esc(d.send.local)} (${esc(d.send.place)} time)` : "right away";
+  const what = d.kind === "post" ? `Posts to Bluesky ${when}. You can undo it for 10 minutes.`
+    : d.kind === "email" ? `Sends to ${esc(mail.to)} ${when}. Emails can't be unsent.` : "Marks it done. Nothing is posted or sent.";
+  const sendRow = editable ? sendTimeRow(d, busy) : "";
+  const gone = removedOf(d).size;
+  const dropped = gone ? ` ${gone} image${gone > 1 ? "s" : ""} removed.` : "";
+  const learn = isChanged
+    ? `<b>${esc(d.lead)} learns from your changes.</b>${dropped} Editing resets the approval streak (${d.streak} of ${d.promote_after}).`
+    : `Approving without changes counts toward ${esc(d.lead)}'s streak: <b>${Math.min(d.streak + 1, d.promote_after)} of ${d.promote_after}</b>.`;
+  const reject = ui.rejecting === id ? `
+    <div class="rejectbox">
+      <b>Why not?</b>
+      <div class="chips">${REASONS.map((r) => `<button class="chip pick" type="button" data-reason="${esc(r)}" aria-pressed="${ui.picked.has(r)}">${esc(r)}</button>`).join("")}</div>
+      <label class="sub" for="reason">Tell ${esc(d.lead)} what to change</label>
+      <textarea id="reason" placeholder="Mention the Friday date, less hype…">${esc(ui.reason[id] || "")}</textarea>
+      <div class="actions" style="border:0;padding:0">
+        <button class="btn primary ${workingClass(id, "revise")}" data-act="revise" type="button" ${left && !busy ? "" : "disabled"}>${busyLabel(id, "revise", `Ask ${esc(d.lead)} to revise${left ? ` (${left} left)` : " (none left)"}`)}</button>
+        <button class="btn danger outline ${workingClass(id, "drop")}" data-act="drop" type="button" ${busy}>${busyLabel(id, "drop", "Drop it")}</button>
+        <span class="spacer"></span>
+        <button class="btn quiet" data-act="cancel-reject" type="button" ${busy}>Cancel</button>
+      </div>
+    </div>` : "";
+  const label = d.send
+    ? (isChanged ? `Approve my version for ${esc(d.send.local)}` : `Approve for ${esc(d.send.local)}`)
+    : isChanged
+    ? (d.kind === "post" ? "Post my version" : "Send my version")
+    : d.kind === "post" ? "Approve and post" : d.kind === "email" ? "Approve and send" : "Approve";
+  const held = d.send && d.send.scheduled;
+  const revised = d.revised_after ? `<span>Revised after your reason: “${esc(d.revised_after)}”</span>` : "";
+  $("review").innerHTML = `
+    <div class="review ${busy ? "busy" : ""}">
+      <div class="review-head"><h3>${esc(d.title)}</h3><span class="sub">${esc(d.type)} · ${esc(d.team)}</span>${d.revision ? `<span class="pill neutral">Revision ${d.revision} of 2</span>` : ""}</div>
+      ${d.asked ? `<div class="asked"><b>You asked:</b> “${esc(d.asked)}”</div>` : ""}
+      ${d.steps.length || revised ? `<div class="steps">${d.steps.map((s) => `<span>${esc(s)}</span>`).join("")}${revised}</div>` : ""}
+      <div class="check"><span>Independent check</span><span class="meter"><i style="width:${d.check}%"></i></span><span class="mono">${d.check}%</span></div>
+      <div class="rbody">
+        ${mailhead}
+        ${tabs}
+        ${body}
+        ${images}
+        ${rules}
+        ${sendRow}
+        <div class="consequence">${what} ${held ? "" : learn}</div>
+      </div>
+      ${reject}
+      ${held ? `
+      <div class="actions">
+        <button class="btn primary ${workingClass(id, "send-now")}" data-act="send-now" type="button" ${busy}>${busyLabel(id, "send-now", "Send now")}</button>
+        <button class="btn ${workingClass(id, "unschedule")}" data-act="unschedule" type="button" ${busy}>${busyLabel(id, "unschedule", "Cancel schedule")}</button>
+      </div>` : `
+      <div class="actions">
+        <button class="btn primary ${workingClass(id, "approve")}" data-act="approve" type="button" ${over || busy ? "disabled" : ""}>${busyLabel(id, "approve", label)}</button>
+        ${editable ? (ui.tab === "edit" ? `<button class="btn" data-act="preview" type="button" ${busy}>Preview</button>` : `<button class="btn" data-act="edit" type="button" ${busy}>Edit</button>`) : ""}
+        ${isChanged ? `<button class="btn quiet" data-act="revert" type="button" ${busy}>Undo my changes</button>` : ""}
+        <span class="spacer"></span>
+        <button class="btn danger outline" data-act="reject" type="button" ${busy}>Reject</button>
+      </div>`}
+      <div class="slow" data-key="${esc(id)}" aria-live="polite">${esc(slowText(id))}</div>
+    </div>`;
+}
+
+function updateCounter() {
+  const d = currentDraft();
+  const counter = $("counter");
+  if (!d || !counter) return;
+  const count = chars(textOf(d));
+  const over = count > POST_LIMIT;
+  counter.className = `counter ${over ? "over" : count > 280 ? "near" : ""}`;
+  counter.innerHTML = `<span class="bar"><i style="width:${Math.min(100, count / 3)}%"></i></span><span class="mono">${count} / ${POST_LIMIT}</span>${over ? "<span>Too long for Bluesky</span>" : ""}`;
+  const approve = document.querySelector('#review [data-act="approve"]');
+  if (approve) approve.disabled = over;
+}
+
+function renderTasks() {
+  $("tasks").innerHTML = data.tasks.length ? data.tasks.map((t) => `
+    <tr>
+      <td>${esc(t.title)}<br><small>${esc(t.team)}</small></td>
+      <td><small>${esc(t.type)}</small></td>
+      <td><span class="pill ${esc(t.status)}">${esc(t.status_label)}</span></td>
+      <td class="num">${t.revisions}</td>
+      <td class="num">${fmtNum(t.tokens)}</td>
+      <td class="num"><small>${esc(fmtTime(t.updated_at))}</small></td>
+    </tr>`).join("") : `<tr><td colspan="6" class="empty">No tasks yet. Ask a team for something in its Telegram topic.</td></tr>`;
+}
+
+function money(cost, unbilled) {
+  if (cost === null) return "not reported";
+  return `$${cost.toFixed(4)}${unbilled ? ` + ${unbilled} not reported` : ""}`;
+}
+
+function renderSpend() {
+  const rows = data.spend;
+  if (!rows.length) { $("spend").innerHTML = `<p class="empty">No model calls yet this week.</p>`; return; }
+  const sum = (key) => rows.reduce((n, r) => n + r[key], 0);
+  const costs = rows.filter((r) => r.cost !== null);
+  const total = costs.length ? costs.reduce((n, r) => n + r.cost, 0) : null;
+  const color = (i) => `m${Math.min(i, 4)}`;
+  $("spend").innerHTML = `
+    ${total ? `<div class="share" aria-hidden="true">${rows.map((r, i) => `<i class="${color(i)}" style="width:${r.share}%"></i>`).join("")}</div>
+    <div class="legend">${rows.filter((r) => r.cost !== null).map((r, i) => `<span><i class="${color(i)}"></i>${esc(r.name)} $${r.cost.toFixed(4)} · ${r.share}%</span>`).join("")}</div>` : ""}
+    <div class="table-wrap">
+      <table>
+        <thead><tr><th>Model</th><th>Used for</th><th class="num">Calls</th><th class="num">Tokens in</th><th class="num">Tokens out</th><th class="num">Cost</th></tr></thead>
+        <tbody>
+          ${rows.map((r) => `<tr><td>${esc(r.name)}<span class="id">${esc(r.model)}</span></td><td><small>${esc(r.purpose || "")}</small></td><td class="num">${fmtNum(r.calls)}</td><td class="num">${fmtNum(r.input_tokens)}</td><td class="num">${fmtNum(r.output_tokens)}</td><td class="num">${money(r.cost, r.unbilled)}</td></tr>`).join("")}
+          <tr class="total"><td>Total</td><td></td><td class="num">${fmtNum(sum("calls"))}</td><td class="num">${fmtNum(sum("input_tokens"))}</td><td class="num">${fmtNum(sum("output_tokens"))}</td><td class="num">${money(total, sum("unbilled"))}</td></tr>
+        </tbody>
+      </table>
+    </div>
+    <p class="sub" style="margin:0">Costs are what OpenRouter billed for each call, never an estimate.</p>`;
+}
+
+function renderSchedules() {
+  const rows = data.schedules;
+  if (!rows.length) {
+    $("schedules").innerHTML = `<p class="empty">No schedules yet. Ask a team in its Telegram topic, for example: “Every Monday at 9, research a topic around my business and propose a newsletter.”</p>`;
+    return;
+  }
+  $("schedules").innerHTML = `
+    <div class="table-wrap"><table>
+      <thead><tr><th>What</th><th>Team</th><th>When</th><th>Next run</th><th>Last run</th><th></th></tr></thead>
+      <tbody>${rows.map((r) => {
+        const key = `sched:${r.schedule_id}`;
+        const busy = ui.busy.has(key) ? "disabled" : "";
+        const state = !r.active ? ` <span class="pill neutral">Stopped</span>` : r.running ? ` <span class="pill in_progress"><span class="spin" aria-hidden="true"></span>Running now</span>` : "";
+        const buttons = r.active
+          ? `<button class="btn small ${workingClass(key, "run")}" type="button" data-act="sched-run" data-id="${esc(r.schedule_id)}" ${busy || (r.running ? "disabled" : "")}>${busyLabel(key, "run", "▶ Run now")}</button>
+             <button class="btn small danger ${workingClass(key, "stop")}" type="button" data-act="sched-stop" data-id="${esc(r.schedule_id)}" ${busy}>${busyLabel(key, "stop", "■ Stop")}</button>`
+          : `<button class="btn small ${workingClass(key, "start")}" type="button" data-act="sched-start" data-id="${esc(r.schedule_id)}" ${busy}>${busyLabel(key, "start", "↻ Turn on")}</button>`;
+        return `<tr>
+          <td class="sched-what"><b>${esc(r.title)}${state}</b><small>${esc(r.request)}</small></td>
+          <td><span class="person">${avatar(r.lead, 0, "sm")}${esc(r.team)}</span></td>
+          <td>${esc(r.cadence)}</td>
+          <td class="mono"><small>${esc(fmtWhen(r.next_run_at))}</small></td>
+          <td class="mono"><small>${esc(fmtWhen(r.last_run_at))}</small></td>
+          <td><div class="sched-actions">${buttons}</div></td>
+        </tr>`;
+      }).join("")}</tbody>
+    </table></div>`;
+}
+
+function renderLessons() {
+  $("lessons-title").textContent = data.lead ? `What ${data.lead} knows about you` : "What your teams know about you";
+  const group = (kind, label) => {
+    const items = data.lessons.filter((l) => l.kind === kind);
+    if (!items.length) return "";
+    return `<div class="label">${label}</div>` + items.map((l) => `
+      <div class="lesson">
+        ${avatar(l.lead, 0, "sm")}
+        <p>${esc(l.text)}</p>
+        <button class="btn small quiet ${workingClass(l.lesson_id, "forget")}" data-act="forget" data-id="${esc(l.lesson_id)}" type="button" ${ui.busy.has(l.lesson_id) ? "disabled" : ""}>${busyLabel(l.lesson_id, "forget", "Forget")}</button>
+        <div class="meta"><span class="${l.business_wide ? "all" : ""}">${esc(l.scope)}</span><span>${esc(l.source)}</span>${l.only ? `<span>${esc(l.only)}</span>` : ""}</div>
+      </div>`).join("");
+  };
+  $("lessons").innerHTML = group("preference", "Preferences") + group("fact", "Facts")
+    || `<p class="empty">Nothing yet. Edits, rejections and feedback in chat show up here.</p>`;
+}
+
+function renderLog() {
+  $("log").innerHTML = data.activity.length ? data.activity.map((a) => {
+    const tags = [];
+    if (!a.ok) tags.push(`<span class="pill bad">Failed</span>`);
+    tags.push(a.autonomous ? `<span class="pill auto">On its own</span>` : `<span class="pill ok">Approved by you</span>`);
+    if (a.undone_at) tags.push(`<span class="pill bad">Undone ${esc(fmtTime(a.undone_at))}</span>`);
+    else if (a.permanent) tags.push(`<span class="pill neutral">Can't be undone</span>`);
+    return `
+      <div class="entry">
+        <time>${esc(fmtTime(a.at))}</time>
+        <div class="what">
+          <b class="${a.undone_at ? "undone" : ""}">${esc(a.summary)}</b>
+          ${a.task ? `<small class="sub">${esc(a.task)}</small>` : ""}
+          ${a.images.length ? `<div class="pics">${a.images.map((image) => thumbImg(image, "thumb sm")).join("")}</div>` : ""}
+          <div class="tags">${tags.join("")}</div>
+          ${a.url && !a.undone_at ? `<a href="${esc(a.url)}" target="_blank" rel="noopener noreferrer">View</a>` : ""}
+        </div>
+        <div class="undo-slot" data-undo-until="${esc(a.undo_until || "")}" data-action="${esc(a.action_id)}"></div>
+      </div>`;
+  }).join("") : `<p class="empty">No actions yet. Posts and emails appear here once approved.</p>`;
+  tickUndo();
+}
+
+function tickUndo() {
+  const now = Date.now() + clockOffset;
+  document.querySelectorAll(".undo-slot").forEach((slot) => {
+    const until = slot.dataset.undoUntil ? Date.parse(slot.dataset.undoUntil) : 0;
+    const left = Math.floor((until - now) / 1000);
+    if (left <= 0) { slot.innerHTML = ""; return; }
+    const label = `Undo · ${Math.floor(left / 60)}:${String(left % 60).padStart(2, "0")}`;
+    const id = slot.dataset.action;
+    const button = slot.querySelector("button");
+    if (ui.busy.has(id)) {
+      if (!button?.classList.contains("working")) slot.innerHTML = `<button class="btn small working" type="button" disabled>${busyLabel(id, "undo", "Undo")}</button>`;
+      return;
+    }
+    if (button && !button.classList.contains("working")) { button.querySelector(".mono").textContent = label.slice(7); return; }
+    slot.innerHTML = `<button class="btn small" data-act="undo" data-id="${esc(id)}" type="button">Undo · <span class="mono">${label.slice(7)}</span></button>`;
+  });
+}
+
+function renderTemplates() {
+  $("templates").innerHTML = data.templates.map((t) => `
+    <div class="tpl">
+      <h3>${esc(t.display_name)}</h3>
+      <p>${esc(t.description)}</p>
+      <div class="people">${t.personas.map((p, i) => avatar(p, i, "sm")).join("")}<span class="sub">${esc(t.people)}</span></div>
+      ${t.hired
+        ? `<span class="pill ok" style="justify-self:start">Hired</span>`
+        : `<button class="btn primary small ${workingClass("hire", t.name)}" style="justify-self:start" data-act="hire" data-id="${esc(t.name)}" type="button" ${ui.busy.has("hire") ? "disabled" : ""}>${busyLabel("hire", t.name, `Hire ${esc(t.display_name)}`)}</button>`}
+    </div>`).join("");
+}
+
+function render() {
+  if (!data) return;
+  document.title = `${data.business.name} · Tenure`;
+  $("biz-name").textContent = data.business.name;
+  renderHome(); renderTeams(); renderInbox(); renderTasks(); renderSpend(); renderSchedules(); renderLessons(); renderLog(); renderTemplates();
+}
+
+function showPage(name, focus = false) {
+  if (!PAGES.includes(name)) name = "home";
+  ui.page = name;
+  for (const page of PAGES) {
+    const tab = $(`t-${page}`);
+    const on = page === name;
+    tab.setAttribute("aria-selected", String(on));
+    tab.tabIndex = on ? 0 : -1;
+    $(`p-${page}`).hidden = !on;
+  }
+  if (focus) $(`t-${name}`).focus();
+  if (location.hash.slice(1) !== name) history.replaceState(null, "", name === "home" ? location.pathname : `#${name}`);
+}
+window.addEventListener("hashchange", () => showPage(location.hash.slice(1)));
+$("nav").addEventListener("keydown", (event) => {
+  const step = { ArrowRight: 1, ArrowLeft: -1 }[event.key];
+  if (!step) return;
+  event.preventDefault();
+  const at = PAGES.indexOf(ui.page);
+  showPage(PAGES[(at + step + PAGES.length) % PAGES.length], true);
+});
+
+function renderLive() {
+  const live = $("live");
+  live.classList.toggle("down", failing);
+  if (failing) { $("live-text").textContent = failure; return; }
+  if (!lastLoad) return;
+  const seconds = Math.max(0, Math.round((Date.now() - lastLoad) / 1000));
+  $("live-text").textContent = `Live · updated ${seconds} s ago`;
+}
+
+let view = "loading";
+function show(next) {
+  view = next;
+  $("app").hidden = next !== "app";
+  $("login").hidden = next !== "login";
+  $("gone").hidden = next !== "gone";
+  if (next === "login") setTimeout(() => $("login-pw").focus(), 0);
+}
+
+async function load() {
+  if (view === "login" || view === "gone") return;
+  try {
+    const response = await fetch(`${API}/overview`, { cache: "no-store" });
+    if (response.status === 404) { show("gone"); return; }
+    if (response.status === 401) { show("login"); return; }
+    if (!response.ok) {
+      failing = true;
+      failure = "The database isn't answering. Retrying… Your drafts are safe.";
+      renderLive();
+      return;
+    }
+    if (view !== "app") show("app");
+    data = await response.json();
+    lastLoad = Date.now();
+    clockOffset = Date.parse(data.now) - lastLoad;
+    failing = false;
+    render();
+  } catch (error) {
+    failing = true;
+    failure = "Can't reach the server. Retrying…";
+  }
+  renderLive();
+}
+
+document.addEventListener("click", (event) => {
+  const nav = event.target.closest("[data-page]");
+  if (nav) { showPage(nav.dataset.page); return; }
+  const review = event.target.closest("[data-review]");
+  if (review) { showPage("drafts"); select(review.dataset.review); return; }
+  const link = event.target.closest('a[href^="#"]');
+  if (link) { event.preventDefault(); showPage(link.getAttribute("href").slice(1)); return; }
+  const pick = event.target.closest("[data-pick]");
+  if (pick) { select(pick.dataset.pick); return; }
+  const tab = event.target.closest("[data-tab]");
+  if (tab) { ui.tab = tab.dataset.tab; renderReview(); if (ui.tab === "edit") $("editor")?.focus(); return; }
+  const reason = event.target.closest("[data-reason]");
+  if (reason) {
+    const r = reason.dataset.reason;
+    if (ui.picked.has(r)) ui.picked.delete(r); else ui.picked.add(r);
+    reason.setAttribute("aria-pressed", String(ui.picked.has(r)));
+    return;
+  }
+  const el = event.target.closest("[data-act]");
+  if (!el) return;
+  const id = el.dataset.id;
+  const d = currentDraft();
+  switch (el.dataset.act) {
+    case "approve": {
+      if (!d) break;
+      const body = {};
+      if (changed(d)) {
+        body.text = textOf(d);
+        if (d.kind === "email") Object.assign(body, mailOf(d));
+        if (removedOf(d).size) body.images = keptImages(d).map((image) => image.file_id);
+      }
+      const verb = d.kind === "post" ? "Posting" : d.kind === "email" ? "Sending" : "Approving";
+      const doing = changed(d)
+        ? { kind: "approve", label: `${verb} your version…`, slow: `${d.lead} is learning from your changes…` }
+        : { kind: "approve", label: `${verb}…` };
+      act(d.approval_id, `/approvals/${d.approval_id}/approve`, body, doing);
+      break;
+    }
+    case "edit": ui.tab = "edit"; renderReview(); $("editor")?.focus(); break;
+    case "preview": ui.tab = "view"; renderReview(); break;
+    case "revert": delete ui.edits[d.approval_id]; delete ui.mail[d.approval_id]; delete ui.removed[d.approval_id]; ui.tab = "view"; renderInbox(true); break;
+    case "img-toggle": {
+      const set = ui.removed[d.approval_id] || new Set();
+      const file = el.dataset.file;
+      if (set.has(file)) set.delete(file); else set.add(file);
+      if (set.size) ui.removed[d.approval_id] = set; else delete ui.removed[d.approval_id];
+      renderInbox(true);
+      break;
+    }
+    case "sched-run": act(`sched:${id}`, `/schedules/${id}/run`, undefined, { kind: "run", label: "Starting…" }); break;
+    case "sched-stop": act(`sched:${id}`, `/schedules/${id}/stop`, undefined, { kind: "stop", label: "Stopping…" }); break;
+    case "sched-start": act(`sched:${id}`, `/schedules/${id}/start`, undefined, { kind: "start", label: "Turning on…" }); break;
+    case "new-image": ui.redrawing = d.approval_id; ui.rejecting = null; renderReview(); $("image-reason")?.focus(); break;
+    case "new-image-cancel": ui.redrawing = null; renderReview(); break;
+    case "time-open": ui.timing = d.approval_id; renderReview(); $("send-at")?.focus(); break;
+    case "time-cancel": ui.timing = null; renderReview(); break;
+    case "time-save": {
+      const at = $("send-at")?.value;
+      if (!at) { toast("Pick a day and time first.", true); break; }
+      act(`time:${d.approval_id}`, `/approvals/${d.approval_id}/send-time`, { at }, { kind: "time", label: "Saving…" }).then((ok) => { if (ok) { ui.timing = null; renderReview(); } });
+      break;
+    }
+    case "time-clear": act(`time:${d.approval_id}`, `/approvals/${d.approval_id}/send-time`, { at: null }, { kind: "clear", label: "Clearing…" }); break;
+    case "send-now": act(d.approval_id, `/approvals/${d.approval_id}/send-now`, undefined, { kind: "send-now", label: "Sending…" }); break;
+    case "unschedule": act(d.approval_id, `/approvals/${d.approval_id}/unschedule`, undefined, { kind: "unschedule", label: "Cancelling…" }); break;
+    case "new-image-go": {
+      const why = (ui.imageReason[d.approval_id] || "").trim();
+      ui.redrawing = null;
+      act(d.approval_id, `/approvals/${d.approval_id}/new-image`, { reason: why || null }, { kind: "new-image", label: "Asking for a new image…", slow: "The team is planning and drawing the new image…" });
+      break;
+    }
+    case "reject": ui.rejecting = d.approval_id; ui.redrawing = null; renderReview(); $("reason")?.focus(); break;
+    case "cancel-reject": ui.rejecting = null; ui.picked.clear(); renderReview(); break;
+    case "revise": {
+      const why = [...ui.picked, (ui.reason[d.approval_id] || "").trim()].filter(Boolean).join(". ");
+      if (!why) { toast(`Pick a reason or tell ${d.lead} what to change.`, true); break; }
+      act(d.approval_id, `/approvals/${d.approval_id}/reject`, { reason: why }, { kind: "revise", label: `Sending to ${d.lead}…`, slow: `${d.lead} is learning from your reason…` });
+      break;
+    }
+    case "drop": act(d.approval_id, `/approvals/${d.approval_id}/reject`, { reason: null }, { kind: "drop", label: "Dropping…" }); break;
+    case "undo": act(id, `/actions/${id}/undo`, undefined, { kind: "undo", label: "Undoing…" }); break;
+    case "lower": ui.lowering = el.dataset.key; render(); break;
+    case "lower-no": ui.lowering = null; render(); break;
+    case "lower-yes": act(`${el.dataset.team}:${el.dataset.type}`, "/trust/lower", { team_id: el.dataset.team, task_type: el.dataset.type }, { kind: "lower", label: "Lowering…" }); break;
+    case "forget": act(id, `/lessons/${id}/forget`, undefined, { kind: "forget", label: "Forgetting…" }); break;
+    case "threshold": act(`threshold:${el.dataset.team}`, "/trust/threshold", { team_id: el.dataset.team, promote_after: Number(el.dataset.value) }); break;
+    case "hire": act("hire", "/hire", { template: id }, { kind: id, label: "Hiring…" }).then((ok) => { if (ok) $("hire").close(); }); break;
+  }
+});
+
+document.addEventListener("input", (event) => {
+  const d = currentDraft();
+  if (!d) return;
+  if (event.target.id === "editor") {
+    ui.edits[d.approval_id] = event.target.value;
+    updateCounter();
+    renderInbox();
+  } else if (event.target.dataset.mail) {
+    ui.mail[d.approval_id] = { ...mailOf(d), [event.target.dataset.mail]: event.target.value };
+    renderInbox();
+  } else if (event.target.id === "reason") {
+    ui.reason[d.approval_id] = event.target.value;
+  } else if (event.target.id === "image-reason") {
+    ui.imageReason[d.approval_id] = event.target.value;
+  }
+});
+
+document.addEventListener("keydown", (event) => {
+  if (view !== "app" || $("hire").open) return;
+  const active = document.activeElement;
+  const typing = active && ["TEXTAREA", "INPUT", "SELECT"].includes(active.tagName);
+  if (typing) {
+    if (event.key === "Escape" && $("review").contains(active)) { active.blur(); ui.tab = "view"; renderReview(); }
+    return;
+  }
+  if (event.metaKey || event.ctrlKey || event.altKey || !data || ui.page !== "drafts") return;
+  const key = event.key.toLowerCase();
+  const click = (act) => document.querySelector(`#review [data-act="${act}"]`)?.click();
+  if (key === "j") move(1);
+  else if (key === "k") move(-1);
+  else if (key === "a") click("approve");
+  else if (key === "e") { event.preventDefault(); click("edit"); }
+  else if (key === "r") { event.preventDefault(); click("reject"); }
+});
+
+$("login-form").addEventListener("submit", async (event) => {
+  event.preventDefault();
+  const input = $("login-pw");
+  $("login-go").disabled = true;
+  try {
+    await post("/login", { password: input.value });
+    input.value = "";
+    input.removeAttribute("aria-invalid");
+    $("login-err").textContent = "";
+    show("loading");
+    await load();
+  } catch (error) {
+    input.setAttribute("aria-invalid", "true");
+    $("login-err").textContent = error.message;
+  } finally {
+    $("login-go").disabled = false;
+  }
+});
+
+$("logout").addEventListener("click", async () => {
+  try { await post("/logout"); } catch (error) { /* signed out locally either way */ }
+  data = null;
+  show("login");
+});
+
+$("open-hire").addEventListener("click", () => $("hire").showModal());
+$("close-hire").addEventListener("click", () => $("hire").close());
+
+showPage(location.hash.slice(1));
+load();
+setInterval(load, REFRESH_MS);
+setInterval(() => { renderLive(); if (data) { tickUndo(); tickSlow(); } }, 1000);
+</script>
+</body>
+</html>

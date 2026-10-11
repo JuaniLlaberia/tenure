@@ -1,4 +1,4 @@
-# Brain ↔ App Contract (v0.2 draft)
+# Brain ↔ App Contract (v0.8 draft)
 
 This is the agreement between the agent brain (`src/brain/`, owner: Juan) and the app (`src/app/`, owner: Mark).
 If both sides respect it, each can be built and tested alone, and they plug together at merge points.
@@ -9,6 +9,49 @@ If both sides respect it, each can be built and tested alone, and they plug toge
 Both change together: a change to one without the other is a bug, and `tests/contract/` should catch the shape side.
 
 ## 0. Changelog
+
+**v0.8 (Oct 10), proposed by Mark, needs Juan's OK**
+
+| # | Change | Why |
+| --- | --- | --- |
+| 1 | `NeedsApproval` and `Approval` gain `send_at`: a one-off time the founder asked for, or `None` (§6, §11) | "Post this Friday at 6 PM" waits for Friday instead of going out on approval |
+| 2 | `BusinessProfile.extra["timezone"]` is a known key: the IANA timezone the founder gave at setup (§11) | Schedules and send times use the founder's clock; without it, Los Angeles |
+
+**v0.7 (Oct 9), proposed by Mark, agreed by Juan.**
+
+| # | Change | Why |
+| --- | --- | --- |
+| 1 | `ApprovalDecision.decision` gains `"new_image"`, with an optional `reason` (§7) | The founder asks for another image while keeping the text. Images are made once, after the lead's review, and only the founder can ask for a new one, so no money goes to images that are thrown away |
+
+**v0.6 (Oct 9), proposed by Mark, agreed by Juan.** Every new field has a default, so v0.5 code keeps working; each feature can ship or be dropped on its own. The plan and the split of the work are in [ROADMAP.md](./ROADMAP.md).
+
+| # | Feature | Change | Why |
+| --- | --- | --- | --- |
+| 1 | Files (shared by 2–4) | New `FileRef` and `FileKind` (§11); `Tools.save_file` and `Tools.read_file` (§9) | One way to pass images, voice notes and documents between brain and app without sending bytes in events |
+| 2 | Multimodal input | `IncomingMessage` gains `attachments` (§7); `text` may be empty (§5) | The founder sends photos, voice notes and files in Telegram |
+| 3 | Visuals in campaigns | `PostSocial` and `SendEmail` gain `images` (max 4); `Tools.post_social` and `Tools.send_email` take them (§9) | Posts and newsletters go out with images |
+| 4 | Visuals in campaigns | `NeedsApproval`, `Approval` and `Say` gain `media`: files to show that aren't part of an action (§6, §11) | A design draft without an action, or a post at `draft_only`, still shows its images |
+| 5 | Design team | Events may carry a persona from another team of the same business (§6) | Marketing and design work on one campaign in the marketing topic |
+| 6 | Agent avatars | `Persona` gains `avatar`: a picture in `assets/avatars/` (§11) | Every lead and specialist has its own picture in the dashboard and Telegram |
+| 7 | Schedules | New `Cadence`, `Schedule` (§11); `Store.save_schedule`, `get_schedule`, `list_schedules` (§10); `ScheduleSaved` event (§6); `Brain.run_schedule` (§4); `Task.schedule_id` (§11); new §5 rules for scheduled runs | "Each Monday, research a topic and propose a newsletter" |
+
+**v0.5 (Oct 9), proposed by Mark, agreed by Juan**
+
+| # | Change | Why |
+| --- | --- | --- |
+| 1 | New `ModelUsage` model and `Store.log_usage(usage)`: one row per LLM or Jev call with the model, tokens in and out, and the cost OpenRouter billed (§10, §11) | The dashboard shows spend per model, from real billed costs instead of an estimate |
+
+**v0.4 (Oct 9), proposed by Mark, agreed by Juan**
+
+| # | Change | Why |
+| --- | --- | --- |
+| 1 | `ApprovalDecision` gains optional `edited_action`: the founder's whole version of the action, so an edit can also change an email's subject and recipient (§7) | The dashboard's review screen edits all fields of an email, not only the body |
+
+**v0.3 (Oct 8), proposed by Mark, agreed by Juan**
+
+| # | Change | Why |
+| --- | --- | --- |
+| 1 | `Trust` gains `promote_after` (default 5, minimum 1); the promotion rule uses it instead of a fixed 5 (§8) | The founder sets how many clean approvals earn a promotion offer, from the dashboard |
 
 **v0.2 (Oct 5), proposed by Juan, needs Mark's OK**
 
@@ -59,7 +102,7 @@ The folder tells you which side owns each file:
 | File | Side | Contains | Implemented / created by | Used by |
 | --- | --- | --- | --- | --- |
 | `brain_side/interface.py` | brain | `Brain`, `TemplateInfo` | Brain | App calls it |
-| `brain_side/events.py` | brain | `Event` and its 11 types | Brain yields them | App renders them |
+| `brain_side/events.py` | brain | `Event` and its 12 types | Brain yields them | App renders them |
 | `app_side/inputs.py` | app | `IncomingMessage`, `ApprovalDecision`, `PromotionResponse` | App builds them from Telegram / dashboard | Brain receives them |
 | `app_side/tools.py` | app | `Tools`, `SearchResult`, `PageContent` | App | Brain calls it |
 | `app_side/store.py` | app | `Store` | App (Supabase; brain has an in-memory fake) | Brain calls it |
@@ -69,12 +112,15 @@ The folder tells you which side owns each file:
 | `models/tasks.py` | shared | `TaskStatus`, `Task`, `Approval` | Brain | Both; app persists and shows them |
 | `models/learning.py` | shared | `Lesson` | Brain (dashboard "forget": app) | Both |
 | `models/actions.py` | shared | `PostSocial`, `SendEmail`, `PlannedAction`, `ActionResult`, `AuditEntry` | Brain plans actions and writes the audit log; app returns `ActionResult` | Both |
+| `models/files.py` | shared | `FileKind`, `FileRef` | App (founder uploads, and `Tools.save_file` for the brain's) | Both; app stores the bytes |
+| `models/schedules.py` | shared | `Cadence`, `Schedule` | Brain (from the founder's request); app sets the run times | Both; app runs them |
+| `models/usage.py` | shared | `ModelUsage` | Brain | App shows spend |
 
 ## 3. Conventions
 
 - **IDs** are uuid4 strings, generated by whoever creates the record:
-  - app: `business_id`, `action_id` (inside `Tools`)
-  - brain: `team_id`, `task_id`, `approval_id`, `lesson_id`
+  - app: `business_id`, `action_id` (inside `Tools`), `file_id` (founder uploads and `Tools.save_file`)
+  - brain: `team_id`, `task_id`, `approval_id`, `lesson_id`, `usage_id`, `schedule_id`
 - uuid4 strings fit Telegram's 64-byte `callback_data` (e.g. `"a:" + approval_id`).
 - **Datetimes** are timezone-aware UTC.
 - **`save_*`, `set_*` and `log_action` are upserts** keyed by the model's id.
@@ -95,6 +141,7 @@ Juan implements, Mark calls. Every method except `list_templates` returns an asy
 | `resolve_approval(decision)` | Founder taps Approve / Reject, or sends the edited text | See the decision table in §7 |
 | `respond_promotion(response)` | Founder answers a `PromotionOffer` | Updates the trust level (§8) |
 | `undo_action(business_id, action_id)` | Founder taps Undo | Deletes the post if inside the window (§9) |
+| `run_schedule(business_id, schedule_id)` | A schedule is due, or the founder taps "Run now" | Runs the schedule's `request` in its team as a new request (§5) |
 
 **`TemplateInfo`**: one hireable team, built from its YAML template.
 
@@ -117,10 +164,15 @@ The app maps Telegram topics to `team_id` (a topic's `message_thread_id` ↔ `te
 - **Debounce.** The app waits 2–3 s after a founder message in a thread and joins consecutive messages with newlines into one `IncomingMessage`.
 - **Edit flow is app-side.** Tapping Edit makes the app ask for the new version; the founder's next message in that topic becomes `ApprovalDecision.edited_text`. It is not sent to `handle_message`.
 - **Interleaving.** Events of different tasks may interleave in one stream (parallel tasks later). Task-related events carry `task_id`.
+- **Attachments.** Photos, voice notes, audio files, documents and videos the founder sends become `FileRef`s in `IncomingMessage.attachments`; the caption is the `text`, and a file without a caption has `text=""`. Debounce joins them like text (a Telegram album is one message). The app stores each file before calling the brain and refuses files over 20 MB (Telegram's download limit for bots) with a chat message, without calling the brain. The brain reads the bytes with `Tools.read_file` and decides what to do with them (transcribe, look, read, or say it can't).
+- **Scheduled runs.** The app owns the clock: it fills `next_run_at` for new schedules, checks due ones every minute and calls `run_schedule` through the same per-thread queue, then sets `last_run_at` and the next `next_run_at`. A run that comes due while the team's thread waits for an answer (an open `Ask` or an edit in progress) waits until the thread is free, and is skipped if it is still blocked 6 hours later. After downtime, a missed schedule runs once, not once per missed occurrence. "Run now" calls `run_schedule` without moving `next_run_at`.
+- **What a scheduled run does.** The brain loads the schedule; if it is missing or inactive it yields a non-recoverable `Error`. Otherwise it runs `request` like a new founder request in the team (planning, steps, check, gate), with `schedule_id` on every task it creates. It never asks a clarifying `Ask` (the founder isn't there; the lead picks the safe reading and says so) and never saves another schedule. Drafts wait for approval as usual; earned autonomy applies as usual.
 
 ## 6. Events (`brain_side/events.py`)
 
 `Event` is a discriminated union on the `type` field. The app parses with `TypeAdapter(Event)` and renders each type. In every event, `team_id = None` means the company-wide chat (General topic).
+
+`team_id` is always where to show the event. Its `persona` may belong to another team of the same business when teams work together: Iris (Design lead) can speak in the marketing topic while she makes the campaign's image.
 
 **`Say`** (`type="say"`): a persona speaks in the chat.
 
@@ -130,6 +182,7 @@ The app maps Telegram topics to `team_id` (a topic's `message_thread_id` ↔ `te
 | `task_id` | `str \| None` | Task it's about, if any |
 | `persona` | `Persona` | Who speaks; app renders "**Maya (Marketing lead):** …" |
 | `text` | `str` | The message |
+| `media` | `list[FileRef]` | Files to show with the message, e.g. images a design task delivered at an acting level. Default `[]` |
 
 **`Progress`** (`type="progress"`): typing indicator plus a short status line; the app may edit one status message instead of posting many.
 
@@ -160,7 +213,13 @@ The app maps Telegram topics to `team_id` (a topic's `message_thread_id` ↔ `te
 | `persona` | `Persona` | Who presents the draft (the lead) |
 | `preview` | `str` | Human-readable: exactly what will be posted or sent |
 | `planned_action` | `PlannedAction \| None` | What runs on approve; `None` for `draft_only` or task types without an action |
+| `media` | `list[FileRef]` | The draft's files when `planned_action` is `None` (a design draft, a post at `draft_only`). Empty when there is an action: its images live in `planned_action.images`. Default `[]` |
 | `check_confidence` | `float` | 0–1, from the independent check; the app may show it |
+| `send_at` | `datetime \| None` | v0.8: when the founder asked for it to go out ("post this Friday at 6 PM"), in UTC. `None`: on approval. Default `None` |
+
+The app shows `planned_action.images` if there is an action, otherwise `media`. A draft with images is one approval: approving runs the action with its images.
+
+**Send times (v0.8).** The brain sets `send_at` when the request names a single future time for the action; repeating requests become schedules instead. A draft with `send_at` always waits for approval, whatever the autonomy level. The app owns the timing: it shows the time, lets the founder change or clear it (or set one on any draft with an action), and when the founder approves, it holds the `approve` decision and sends it at that time. Until then the approval stays `pending`; if the action then fails, the draft is back with the founder like any failed action.
 
 **`ActionDone`** (`type="action_done"`): a real action happened.
 
@@ -212,6 +271,14 @@ The app maps Telegram topics to `team_id` (a topic's `message_thread_id` ↔ `te
 | `display_name` | `str` | Topic name (`"Marketing"`) |
 | `personas` | `list[Persona]` | Lead first |
 
+**`ScheduleSaved`** (`type="schedule_saved"`): the team created or changed a schedule (also when the founder stopped one in chat). The app shows a card with the cadence in words ("Every Monday at 9:00"), "Run now" and, while `schedule.active`, "Stop".
+
+| Field | Type | Meaning |
+| --- | --- | --- |
+| `team_id` | `str` | Topic |
+| `persona` | `Persona` | Who confirms it (the lead) |
+| `schedule` | `Schedule` | The schedule as saved |
+
 **`OnboardingComplete`** (`type="onboarding_complete"`)
 
 | Field | Type | Meaning |
@@ -238,6 +305,7 @@ The app maps Telegram topics to `team_id` (a topic's `message_thread_id` ↔ `te
 | `text` | `str` | Message text (debounced messages joined with newlines) |
 | `message_id` | `str` | Telegram message id; recorded as the source of lessons learned from chat |
 | `sent_at` | `datetime` | When the founder sent it |
+| `attachments` | `list[FileRef]` | Files the founder sent with it, already stored by the app (§5). Default `[]` |
 
 **`ApprovalDecision`**
 
@@ -245,18 +313,22 @@ The app maps Telegram topics to `team_id` (a topic's `message_thread_id` ↔ `te
 | --- | --- | --- |
 | `business_id` | `str` | Business |
 | `approval_id` | `str` | From `NeedsApproval` |
-| `decision` | `"approve" \| "edit" \| "reject"` | The founder's choice |
+| `decision` | `"approve" \| "edit" \| "reject" \| "new_image"` | The founder's choice |
 | `edited_text` | `str \| None` | Required for `edit`: the new post text, or the new email body |
-| `reason` | `str \| None` | Optional for `reject`; with a reason the team revises and learns |
+| `edited_action` | `PlannedAction \| None` | Optional for `edit`: the founder's whole version of the action, same `tool` as the draft's. Set when more than the text changed (an email's `subject` or `to`, or an image removed); its text or body always equals `edited_text`. Its `images` are a subset of the draft's: the founder can remove images, not add them |
+| `reason` | `str \| None` | Optional for `reject`; with a reason the team revises and learns. Optional for `new_image`: what to change in the image |
 
 What each decision does (plain code in the brain, outside the graph):
 
 | Decision | Effect |
 | --- | --- |
 | `approve` | Runs the planned action (if any), logs it, streak + 1, saves the draft as an approved example, may emit `PromotionOffer` |
-| `edit` | Runs the action with `edited_text`, streak → 0, reflects on the diff → `LessonLearned` |
+| `edit` | Runs `edited_action` if given, otherwise the planned action with `edited_text`; streak → 0, reflects on the diff → `LessonLearned` |
 | `reject` + `reason` | Streak → 0, reflects → `LessonLearned`, the task is revised once with the reason → new `NeedsApproval` with a new `approval_id` (if revisions are left) |
 | `reject`, no reason | Streak → 0, task → `REJECTED` |
+| `new_image` | Only for drafts with an image the team made. Streak → 0; with a reason, reflects → `LessonLearned` for the team that made the image; the image is planned again, reviewed and made once, the text stays → new `NeedsApproval` with a new `approval_id`. Out of revisions: a recoverable `Error`, and the draft stays pending |
+
+**Images are made once.** The team plans a draft's images while it works, and the lead's review judges the text and the image plans together. Images are made only after the review passes, right before `NeedsApproval`. Automatic revisions never make a new image; only the founder does, through `new_image` or a rejection whose reason is about the image.
 
 Resolving an approval that isn't `pending` yields a recoverable `Error`.
 
@@ -288,14 +360,16 @@ Resolving an approval that isn't `pending` yields a recoverable `Error`.
 | `task_type` | `str` | Task type |
 | `level` | `AutonomyLevel` | Current level |
 | `approval_streak` | `int` | Approvals in a row without edits |
+| `promote_after` | `int` | Clean approvals in a row before a promotion offer. Default 5, minimum 1; set by the founder on the dashboard |
 | `updated_at` | `datetime` | Last change |
 
 Rules (the brain owns the logic, the Store keeps the state):
 
-- The brain creates one `Trust` row per task type on hire, at the template's `start_level`, streak 0.
+- The brain creates one `Trust` row per task type on hire, at the template's `start_level`, streak 0, `promote_after` at its default.
 - Approve without edits → streak + 1. Edit, reject or undo → streak 0. Actions taken without approval don't change the streak.
-- **Promotion:** the streak reaches 5, the last 5 approvals all had `check_confidence ≥ 0.8`, and the level is below the template's cap → emit `PromotionOffer` for the next level up. Accept → level + 1, streak 0. Decline → streak 0 (no re-offer on the next approval).
+- **Promotion:** the streak reaches `promote_after`, the last `promote_after` approvals (`recent_approvals(limit=promote_after)`) all had `check_confidence ≥ 0.8`, and the level is below the template's cap → emit `PromotionOffer` for the next level up. Accept → level + 1, streak 0. Decline → streak 0 (no re-offer on the next approval).
 - **Demotion:** the founder can demote anytime from the dashboard. The app writes the level directly (same as `Store.set_trust`) and resets the streak. The brain reads trust fresh every time; it never caches it.
+- **Promotion threshold:** the founder can change `promote_after` from the dashboard. The app writes it through `Store.set_trust` and leaves the level and streak as they are.
 - Finance never moves money at any level: no payment tool exists in `Tools`, and none may be added.
 
 ## 9. Tools (`app_side/tools.py`) and actions (`models/actions.py`)
@@ -304,18 +378,24 @@ Mark implements, the brain calls. Real actions run only after approval, or direc
 
 | Method | What it does | Returns |
 | --- | --- | --- |
-| `post_social(business_id, text)` | Posts to the business's Bluesky | `ActionResult`; `external_id` = post URI |
+| `post_social(business_id, text, images=None)` | Posts to the business's Bluesky, with up to 4 images and their `alt_text`. The app shrinks an image over Bluesky's 2 MB limit | `ActionResult`; `external_id` = post URI |
 | `delete_social(business_id, external_id)` | Deletes a post (undo) | `ActionResult` |
-| `send_email(business_id, to, subject, body)` | Sends via Resend; `body` is plain text or simple markdown, the app converts | `ActionResult` |
+| `send_email(business_id, to, subject, body, images=None)` | Sends via Resend; `body` is plain text or simple markdown, the app converts. The first image goes above the body as a header, the others below it | `ActionResult` |
 | `web_search(query, k=5)` | Web search (Keenable or fallback) | `list[SearchResult]`, `[]` on failure |
 | `fetch_page(url)` | Fetches a page as clean, model-ready text | `PageContent`, or `None` if unreachable |
+| `save_file(business_id, data, mime_type, name=None, alt_text=None)` | Stores a file the brain made (a generated image); `source="generated"`, `kind` from `mime_type` | `FileRef`, or `None` if it couldn't be stored |
+| `read_file(business_id, file_id)` | The bytes of a stored file of this business (founder upload or generated) | `bytes`, or `None` if missing or another business's |
+
+`save_file` and `read_file` aren't audited: storing a file is not a real action. Posting or sending it is.
 
 **`PlannedAction`**: what will run on approval. A union on `tool`:
 
 | Model | `tool` | Fields |
 | --- | --- | --- |
-| `PostSocial` | `"post_social"` | `text`: max 300 characters (Bluesky's limit is 300 graphemes; the brain stays under it) |
-| `SendEmail` | `"send_email"` | `to`, `subject`, `body` |
+| `PostSocial` | `"post_social"` | `text`: max 300 characters (Bluesky's limit is 300 graphemes; the brain stays under it). `images`: up to 4 image `FileRef`s, default `[]` |
+| `SendEmail` | `"send_email"` | `to`, `subject`, `body`. `images`: up to 4 image `FileRef`s, default `[]` |
+
+Only `kind="image"` files go in `images`. An image's `alt_text` is the alt text Bluesky and the email show.
 
 **`ActionResult`**: returned by every action tool.
 
@@ -367,6 +447,11 @@ Mark implements (Supabase), the brain calls. The brain's tests and CLI use an in
 | `save_lesson(lesson)` | Adds or updates a lesson (also used to deactivate one) |
 | `list_lessons(business_id, team_id, task_type=None)` | Active lessons only, newest first: business-wide lessons (`team_id` None) plus, if `team_id` is given, that team's lessons. With `task_type`, keeps lessons for that task type or for any (`task_type` None) |
 | `log_action(entry)` / `get_action(action_id)` | Audit log |
+| `log_usage(usage)` | One `ModelUsage` row per LLM or Jev call, written by the brain right after the call. Insert only; a failure to log never breaks the work |
+| `save_schedule(schedule)` / `get_schedule(schedule_id)` | Schedules. The brain saves new and changed ones; the app saves run times and dashboard or Telegram "Stop" (`active=False`), like a demotion |
+| `list_schedules(business_id, team_id=None)` | All of a business's schedules, active and stopped, newest first; with `team_id`, only that team's |
+
+File bytes and their metadata live behind `Tools` (`save_file`, `read_file`), not the Store: the brain never lists files.
 
 The business itself (its row and the Telegram group mapping) is created by the app on `/start` and isn't part of the Store interface. The brain treats "business onboarding done" as `get_profile(...) is not None`. Partial onboarding answers live in the brain's checkpoint.
 
@@ -374,7 +459,58 @@ LangGraph checkpoints are the brain's own business. They live in their own table
 
 ## 11. Shared models
 
-**`Persona`** (`models/team.py`): `name` ("Maya") and `role` ("Marketing lead").
+**`ModelUsage`** (`models/usage.py`): one LLM or Jev call, for spend per model.
+
+| Field | Type | Meaning |
+| --- | --- | --- |
+| `usage_id` | `str` | Generated by the brain |
+| `business_id` | `str` | The business the call worked for |
+| `team_id`, `task_id` | `str \| None` | Set when the call was for a team or a task (`None` for business onboarding, General chat) |
+| `model` | `str` | OpenRouter model id, as configured (`"deepseek/deepseek-v4-flash-0731"`) |
+| `purpose` | `str \| None` | What the brain uses this model for, in plain words ("Reviews", "Decisions") |
+| `input_tokens`, `output_tokens` | `int` | As OpenRouter reports them |
+| `cost` | `float \| None` | US dollars OpenRouter billed for the call; `None` if the response had no cost. Never an estimate |
+| `at` | `datetime` | When the call finished |
+
+**`Persona`** (`models/team.py`): `name` ("Maya"), `role` ("Marketing lead") and `avatar`: the picture's path inside the shared `assets/avatars/` folder (`"marketing/maya.png"`), or `None`. Brain sets it from the template; the app serves the folder and shows the picture in the dashboard and in Telegram's "meet your team" message. Square PNG, 512 × 512.
+
+**`FileRef`** (`models/files.py`): a stored file. The bytes stay with the app; events and models carry only this.
+
+| Field | Type | Meaning |
+| --- | --- | --- |
+| `file_id` | `str` | Generated by the app when it stores the file |
+| `business_id` | `str` | Owner; `read_file` never returns another business's file |
+| `kind` | `FileKind` | `image`, `audio` (voice notes too), `video`, `document` (PDF, text, anything else) |
+| `mime_type` | `str` | `"image/png"`, `"audio/ogg"`, `"application/pdf"` |
+| `name` | `str \| None` | Original file name, if any |
+| `size_bytes` | `int` | Size |
+| `source` | `"founder" \| "generated"` | Sent by the founder, or made by the brain (`save_file`) |
+| `alt_text` | `str \| None` | For images: what it shows, in one sentence. Set by the brain for generated images; the brain may describe founder photos when it uses them in a post |
+| `created_at` | `datetime` | When it was stored |
+
+**`Cadence`** (`models/schedules.py`): when a schedule repeats, in the business's local time.
+
+| Field | Type | Meaning |
+| --- | --- | --- |
+| `every` | `"day" \| "week" \| "month"` | How often |
+| `weekday` | `int \| None` | For `week`: 0 = Monday … 6 = Sunday |
+| `day` | `int \| None` | For `month`: day of the month, 1–28 |
+| `hour`, `minute` | `int` | Local time; default 9:00 |
+| `timezone` | `str` | IANA name; default `"America/Los_Angeles"` until the profile knows better |
+
+**`Schedule`** (`models/schedules.py`): a request a team runs again and again.
+
+| Field | Type | Meaning |
+| --- | --- | --- |
+| `schedule_id` | `str` | Generated by the brain |
+| `business_id`, `team_id` | `str` | Owner team; it runs in that team's topic |
+| `title` | `str` | Short label ("Monday newsletter idea") |
+| `request` | `str` | What runs each time, in the founder's words, without the repeat part ("Research an interesting topic around my business and propose a newsletter") |
+| `cadence` | `Cadence` | When |
+| `active` | `bool` | `False` once stopped (chat, dashboard or Telegram button) |
+| `next_run_at` | `datetime \| None` | Set by the app; `None` until the app schedules it. The brain leaves it as it is |
+| `last_run_at` | `datetime \| None` | Set by the app when it starts a run |
+| `created_at` | `datetime` | When the founder asked |
 
 **`Team`** (`models/team.py`): a team hired by one business.
 
@@ -399,7 +535,7 @@ LangGraph checkpoints are the brain's own business. They live in their own table
 | `tone` | `str \| None` | Voice, e.g. "friendly, no jargon" |
 | `main_clients` | `list[str]` | Client names (finance will need a richer `Client` model, v0.3) |
 | `links` | `list[str]` | Website, socials |
-| `extra` | `dict[str, str]` | Business-level odds and ends. Team-specific answers go to lessons, not here |
+| `extra` | `dict[str, str]` | Business-level odds and ends. Team-specific answers go to lessons, not here. Known key (v0.8): `timezone`, an IANA name asked at setup; missing means `"America/Los_Angeles"` |
 
 **`TaskStatus`** (`models/tasks.py`): `planned` → `in_progress` → `waiting_approval` → `done`, or `rejected` (founder rejected without a reason) or `failed` (something broke).
 
@@ -417,6 +553,7 @@ LangGraph checkpoints are the brain's own business. They live in their own table
 | `current_step` | `int` | Index into `steps` |
 | `revisions` | `int` | Revision rounds so far (2 included in one billable task) |
 | `tokens_used` | `int` | LLM tokens spent, for the cost slide |
+| `schedule_id` | `str \| None` | The schedule that started it, if any |
 | `created_at`, `updated_at` | `datetime` | Timestamps |
 
 **`Approval`** (`models/tasks.py`): one draft shown to the founder.
@@ -428,10 +565,12 @@ LangGraph checkpoints are the brain's own business. They live in their own table
 | `task_type` | `str` | Needed for trust updates |
 | `preview` | `str` | The original draft as shown to the founder |
 | `planned_action` | `PlannedAction \| None` | What runs on approve |
+| `media` | `list[FileRef]` | Same as `NeedsApproval.media` |
 | `check_confidence` | `float` | 0–1, from the independent check |
 | `status` | `"pending" \| "approved" \| "edited" \| "rejected"` | Starts `pending` |
 | `edited_text` | `str \| None` | The founder's version, for `edited` |
 | `reason` | `str \| None` | The founder's reason, for `rejected` |
+| `send_at` | `datetime \| None` | Same as `NeedsApproval.send_at` (v0.8) |
 | `created_at` | `datetime` | When it was shown |
 | `resolved_at` | `datetime \| None` | When the founder decided |
 
@@ -453,8 +592,8 @@ LangGraph checkpoints are the brain's own business. They live in their own table
 
 ## 12. Stubs and merge points (so nobody waits)
 
-- **Mark:** `src/app/fake_brain.py` implements `Brain` and yields canned events for each method. It covers at least one `Ask`, two `NeedsApproval`, one `LessonLearned`, one `ActionDone` with an undo window and one `PromotionOffer`.
-- **Juan:** `src/brain/cli.py` chats in the terminal, with `InMemoryStore` and `FakeTools` (print instead of posting) from `src/brain/fakes.py`.
+- **Mark:** `src/app/fake_brain.py` implements `Brain` and yields canned events for each method. It covers at least one `Ask`, two `NeedsApproval`, one `LessonLearned`, one `ActionDone` with an undo window and one `PromotionOffer`. Since v0.6 also: a `ScheduleSaved` for "every Monday …" and `run_schedule`; a draft with a sample image; a `Say` that acknowledges attachments by kind; personas with avatars.
+- **Juan:** `src/brain/cli.py` chats in the terminal, with `InMemoryStore` and `FakeTools` (print instead of posting) from `src/brain/fakes.py`. Since v0.6 `FakeTools` keeps files in a dict (`save_file`, `read_file`) and records the images passed to `post_social` and `send_email`; `InMemoryStore` keeps schedules; the CLI accepts `/file <path>` to attach a local file to the next message.
 - **Merge points:** Tue night, Wed night, Thu 12:30 (first full run), Thu night.
 
 ## 13. Decisions and open items
@@ -464,7 +603,7 @@ Decided (the open questions from v0.1, Oct 5):
 1. **Undo:** 10 minutes, Bluesky posts only. Emails are never undoable.
 2. **Who starts business onboarding:** the app, when the founder sends `/start` in the company group, by calling `start_onboarding`.
 3. **Debounce:** yes, 2–3 s per thread in the app, plus a per-thread queue (§5).
-4. **Cost logging:** `Task.tokens_used` only, no event.
+4. **Cost logging:** `Task.tokens_used` per task, and since v0.5 one `ModelUsage` row per call (`Store.log_usage`). No event.
 
 Still open (Mark decides, app-side, no contract change expected):
 

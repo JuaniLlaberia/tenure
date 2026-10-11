@@ -13,15 +13,19 @@ from contract.brain_side.events import (
     Progress,
     PromotionOffer,
     Say,
+    ScheduleSaved,
     TeamHired,
 )
 from contract.brain_side.interface import Brain, TemplateInfo
 from contract.models.actions import ActionResult, AuditEntry, PlannedAction, PostSocial, SendEmail
 from contract.models.autonomy import AutonomyLevel, Trust
 from contract.models.business import BusinessProfile
+from contract.models.files import FileKind, FileRef
 from contract.models.learning import Lesson
+from contract.models.schedules import Cadence, Schedule
 from contract.models.tasks import Approval, Task, TaskStatus
 from contract.models.team import Persona, Team
+from contract.models.usage import ModelUsage
 
 __all__ = [
     "ActionDone",
@@ -34,11 +38,15 @@ __all__ = [
     "AutonomyLevel",
     "Brain",
     "BusinessProfile",
+    "Cadence",
     "Error",
     "Event",
+    "FileKind",
+    "FileRef",
     "IncomingMessage",
     "Lesson",
     "LessonLearned",
+    "ModelUsage",
     "NeedsApproval",
     "OnboardingComplete",
     "PageContent",
@@ -49,6 +57,8 @@ __all__ = [
     "PromotionOffer",
     "PromotionResponse",
     "Say",
+    "Schedule",
+    "ScheduleSaved",
     "SearchResult",
     "SendEmail",
     "Store",
