@@ -44,5 +44,6 @@ class Approval(BaseModel):
     status: Literal["pending", "approved", "edited", "rejected"] = "pending"
     edited_text: str | None = None
     reason: str | None = None
+    send_at: datetime | None = None
     created_at: datetime
     resolved_at: datetime | None = None

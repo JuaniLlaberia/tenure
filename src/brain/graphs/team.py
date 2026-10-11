@@ -1,6 +1,7 @@
 import logging
 from collections.abc import AsyncIterator, Callable
 from dataclasses import dataclass
+from datetime import UTC, datetime
 from typing import Literal, TypedDict
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
@@ -15,21 +16,34 @@ from brain.common import new_id
 from brain.context import build_context
 from brain.deps import Deps
 from brain.flows.actions import execute_action
-from brain.flows.approvals import MAX_REVISIONS
+from brain.flows.approvals import MAX_CHECKS
 from brain.flows.autonomy import gate
 from brain.graphs.specialist import build_specialist_graph, run_specialist
 from brain.helpers.decide import decide
 from brain.helpers.images import ImageError
 from brain.prompts.lead import (
     ABOUT_IMAGE,
+    DROPPED,
     HAS_FEEDBACK,
+    IMAGE_QUESTION,
+    IMAGE_REPLIES,
     IS_CLEAR,
+    MENTIONS_IMAGE,
     NAMES_CHANNELS,
+    NAMES_SEND_TIME,
+    NO_IMAGE_MADE,
+    ONE_OFF,
+    OTHER_CHANNEL,
+    OTHER_CHANNEL_ASK,
+    OTHER_CHANNEL_REPLIES,
     STOPS_SCHEDULE,
+    WANTS_BLUESKY,
+    WANTS_IMAGE,
     WANTS_SCHEDULE,
     WEEKDAYS,
     LeadPlan,
     ScheduleDraft,
+    SendTime,
     TaskPlan,
     cadence_words,
     changes_question,
@@ -38,6 +52,7 @@ from brain.prompts.lead import (
     reply_messages,
     report_text,
     schedule_messages,
+    send_time_messages,
     triage_state,
     which_question,
 )
@@ -85,6 +100,10 @@ class TaskState(BaseModel):
     aspects: dict[str, str] = {}
     rendered: bool = False
     redraw: bool = False
+    checks: int = 0
+    missed: str | None = None
+    approval_id: str | None = None
+    send_at: datetime | None = None
 
 class TeamState(TypedDict, total=False):
     business_id: str
@@ -109,6 +128,10 @@ class TeamState(TypedDict, total=False):
     reply_reason: str | None
     reasoning: bool
     ask_channels: bool
+    ask_image: bool
+    drop: bool
+    other_channel: bool
+    send_at: str | None
     history: list[str]
     routed: list[str]
     plan_question: str | None
@@ -152,6 +175,10 @@ def new_request(
         "reply_reason": None,
         "reasoning": False,
         "ask_channels": False,
+        "ask_image": False,
+        "drop": False,
+        "other_channel": False,
+        "send_at": None,
         "routed": [],
         "plan_question": None,
         "clarified": 0,
@@ -227,7 +254,13 @@ def build_team_graph(
         past = (state.get("past_tasks") or {}).get(task.task_id)
         redraw = rerun is not None
         if past is None:
-            return TaskState(task=task, feedback=feedback, reasoning=reasoning, redraw=redraw)
+            return TaskState(
+                task=task,
+                feedback=feedback,
+                reasoning=reasoning,
+                redraw=redraw,
+                send_at=approval.send_at,
+            )
         return TaskState.model_validate(past).model_copy(
             update={
                 "task": task,
@@ -236,10 +269,14 @@ def build_team_graph(
                 "check_confidence": None,
                 "reasoning": reasoning,
                 "redraw": redraw,
+                "checks": 0,
+                "send_at": approval.send_at,
             }
         )
 
     def after_entry(state: TeamState) -> str:
+        if state.get("drop"):
+            return END
         if state.get("revise") and state.get("order"):
             return "dispatch"
         if not state["onboarded"]:
@@ -349,22 +386,28 @@ def build_team_graph(
         active: list[Schedule] = []
         if not scheduled:
             questions["has_feedback"] = HAS_FEEDBACK
+            questions["one_off"] = ONE_OFF
             questions["wants_schedule"] = WANTS_SCHEDULE
+            if post_task_type(template):
+                questions["other_channel"] = OTHER_CHANNEL
+            if template.channel_task_types():
+                questions["names_send_time"] = NAMES_SEND_TIME
             active = await active_schedules(state)
             if active:
                 questions["changes_schedule"] = changes_question(active)
         decisions = await decide(deps, questions, triage_state(template, state["request"]))
         reasoning = wants_reasoning(deps, decisions)
         tokens = state.get("tokens_used", 0) + decisions.tokens
-        if not scheduled and learn is not None and decisions["has_feedback"].accepts(
-            "yes", threshold
-        ):
+        lasting = not scheduled and not decisions["one_off"].accepts("yes", threshold)
+        if lasting and learn is not None and decisions["has_feedback"].accepts("yes", threshold):
             async for event in learn({**state, "reasoning": reasoning}, state["request"]):
                 emit(event)
         if active and decisions["changes_schedule"].accepts("yes", threshold):
             return {"schedule_mode": "change", "reasoning": reasoning, "tokens_used": tokens}
         if not scheduled and decisions["wants_schedule"].accepts("yes", threshold):
             return {"schedule_mode": "new", "reasoning": reasoning, "tokens_used": tokens}
+        if "other_channel" in questions and decisions["other_channel"].accepts("yes", threshold):
+            return {"other_channel": True, "reasoning": reasoning, "tokens_used": tokens}
         routed = routed_from(template, decisions)
         goes_out = set(routed) & set(template.channel_task_types())
         ask_channels = bool(
@@ -373,6 +416,11 @@ def build_team_graph(
             and not decisions["names_channels"].accepts("yes", threshold)
         )
         assumptions = list(state.get("assumptions") or [])
+        send_at = None
+        if goes_out and "names_send_time" in questions:
+            if decisions["names_send_time"].accepts("yes", threshold):
+                send_at, extracted = await extract_send_time(state)
+                tokens += extracted
         if scheduled and ask_channels:
             ask_channels = False
             made = ", ".join(task_type.replace("_", " ") for task_type in routed)
@@ -383,6 +431,7 @@ def build_team_graph(
         return {
             "routed": routed,
             "ask_channels": ask_channels,
+            "send_at": send_at.isoformat() if send_at else None,
             "assumptions": assumptions,
             "reasoning": reasoning,
             "reply_reason": "chat",
@@ -394,9 +443,43 @@ def build_team_graph(
             return "schedule"
         if state.get("schedule_mode") == "change":
             return "change_schedule"
+        if state.get("other_channel"):
+            return "other_channel"
         if state.get("ask_channels"):
             return "channels"
         return "plan" if state["routed"] else "reply"
+
+    async def extract_send_time(state: TeamState) -> tuple[datetime | None, int]:
+        """
+        The one time the founder wants the draft to go out, read in the business's timezone
+        and kept in UTC. A time that has passed, or none, gives None.
+        """
+        profile = await deps.store.get_profile(state["business_id"])
+        zone = ZoneInfo(
+            valid_zone(profile.extra.get("timezone") if profile else None)
+            or Cadence.model_fields["timezone"].default
+        )
+        now = deps.clock()
+        today = now.astimezone(zone).strftime("%A %Y-%m-%d %H:%M")
+        try:
+            result = await deps.llm.structured(
+                deps.settings.model_lead,
+                send_time_messages(state["request"], today),
+                SendTime,
+                reasoning=False,
+            )
+        except Exception as error:
+            log.warning("Send time extraction failed: %s", error)
+            return None, 0
+        found = result.value
+        try:
+            day = datetime.strptime(found.date or "", "%Y-%m-%d")
+            at = datetime.strptime(found.time or "09:00", "%H:%M")
+        except ValueError:
+            return None, result.tokens
+        local = day.replace(hour=at.hour, minute=at.minute, tzinfo=zone)
+        when = local.astimezone(UTC)
+        return (when if when > now else None), result.tokens
 
     async def active_schedules(state: TeamState) -> list[Schedule]:
         """
@@ -570,11 +653,48 @@ def build_team_graph(
             "ask_channels": False,
         }
 
+    async def other_channel(state: TeamState) -> dict:
+        """
+        Work for a channel the team can't post to: offer a Bluesky post instead. Anything but
+        a clear yes drops the request.
+        """
+        template = template_of(state)
+        lead = template.lead.persona
+        ask = Ask(
+            team_id=state["team_id"],
+            persona=lead,
+            question=OTHER_CHANNEL_ASK,
+            quick_replies=OTHER_CHANNEL_REPLIES,
+        )
+        answer = str(interrupt(ask.model_dump(mode="json")))
+        exchange = f"{lead.name}: {OTHER_CHANNEL_ASK}\nFounder: {answer}"
+        decisions = await decide(deps, {"wants_bluesky": WANTS_BLUESKY}, exchange)
+        tokens = state.get("tokens_used", 0) + decisions.tokens
+        if not decisions["wants_bluesky"].accepts("yes", threshold):
+            emit(Say(team_id=state["team_id"], persona=lead, text=DROPPED))
+            return {"other_channel": False, "routed": [], "tokens_used": tokens}
+        return {
+            "other_channel": False,
+            "routed": [post_task_type(template)],
+            "request": f"{state['request']}\n\n{exchange}",
+            "tokens_used": tokens,
+        }
+
     async def reply(state: TeamState) -> dict:
         template = template_of(state)
         context = await build_context(deps, state["business_id"], state["team_id"], None)
+        hired = {team.template for team in await deps.store.list_teams(state["business_id"])}
+        others = [
+            (other, other.name in hired)
+            for other in deps.templates.values()
+            if other.name != template.name
+        ]
         messages = reply_messages(
-            template, state["request"], context, no_match=state.get("reply_reason") == "no_match"
+            template,
+            state["request"],
+            context,
+            no_match=state.get("reply_reason") == "no_match",
+            others=others,
         )
         completion = await deps.llm.complete(
             deps.settings.model_lead, messages, reasoning=state.get("reasoning", False)
@@ -653,6 +773,10 @@ def build_team_graph(
         teams = await deps.store.list_teams(state["business_id"])
         ready = {team.template for team in teams if team.onboarded}
         hired = {team.template for team in teams}
+        choice, image_tokens = await image_choice(state, plans, ready)
+        tokens += image_tokens
+        if choice == "no":
+            ready = set()
         for item in plans:
             task = Task(
                 task_id=new_id(),
@@ -668,7 +792,10 @@ def build_team_graph(
                 updated_at=now,
             )
             await deps.store.save_task(task)
-            ts = TaskState(task=task, reasoning=state.get("reasoning", False), media=media)
+            send_at = state.get("send_at") if template.task_types[item.task_type].action else None
+            ts = TaskState(
+                task=task, reasoning=state.get("reasoning", False), media=media, send_at=send_at
+            )
             tasks[task.task_id] = ts.model_dump(mode="json")
             order.append(task.task_id)
         offered = set(state.get("suggested_teams") or [])
@@ -689,11 +816,79 @@ def build_team_graph(
             "suggest": list(dict.fromkeys(suggest)),
             "assumptions": assumptions,
             "schedule_history": runs_after(state, [p.title for p in plans]),
+            "ask_image": choice == "ask",
             "tokens_used": tokens,
         }
 
+    async def image_choice(
+        state: TeamState, plans: list[TaskPlan], ready: set[str]
+    ) -> tuple[Literal["yes", "no", "ask"] | None, int]:
+        """
+        Whether this request comes with another team's image (the Design team's illustrator):
+        "yes" or "no" when the request says so, "ask" when it doesn't. None when no planned task
+        would get such a step. A scheduled run never asks: it makes an image only when its
+        request says so.
+        """
+        template = template_of(state)
+        if not any(set(template.task_types[item.task_type].with_teams) & ready for item in plans):
+            return None, 0
+        questions = {"mentions_image": MENTIONS_IMAGE, "wants_image": WANTS_IMAGE}
+        decisions = await decide(deps, questions, f"Request:\n{state['request']}")
+        if decisions["mentions_image"].accepts("yes", threshold):
+            wants = decisions["wants_image"].accepts("yes", threshold)
+            return ("yes" if wants else "no"), decisions.tokens
+        return ("no" if state.get("schedule_id") else "ask"), decisions.tokens
+
+    def illustrator(state: TeamState) -> Persona | None:
+        """
+        Who would make the request's image: the specialist of the first other team's step.
+        """
+        for task_id in state.get("order") or []:
+            steps = load(state, task_id).task.steps
+            index = cross_step(steps)
+            if index is None:
+                continue
+            name, _, specialist_id = steps[index].rpartition(":")
+            home = deps.templates.get(name)
+            if home is not None and specialist_id in home.specialists:
+                return home.specialists[specialist_id].persona
+        return None
+
+    async def image(state: TeamState) -> dict:
+        """
+        The founder didn't say whether to make an image: ask. Anything but a clear yes means no
+        image, and the tasks drop the other team's steps.
+        """
+        template = template_of(state)
+        lead = template.lead.persona
+        maker = illustrator(state)
+        question = IMAGE_QUESTION.format(name=maker.name if maker else "the Design team")
+        ask = Ask(
+            team_id=state["team_id"], persona=lead, question=question, quick_replies=IMAGE_REPLIES
+        )
+        answer = str(interrupt(ask.model_dump(mode="json")))
+        decisions = await decide(
+            deps, {"wants_image": WANTS_IMAGE}, f"{lead.name}: {question}\nFounder: {answer}"
+        )
+        update: dict = {
+            "ask_image": False,
+            "tokens_used": state.get("tokens_used", 0) + decisions.tokens,
+        }
+        if decisions["wants_image"].accepts("yes", threshold):
+            return update
+        tasks = dict(state["tasks"])
+        for task_id in state["order"]:
+            ts = load(state, task_id)
+            own = [step for step in ts.task.steps if ":" not in step]
+            if own != ts.task.steps:
+                task = await save(ts.task, steps=own)
+                tasks[task_id] = ts.model_copy(update={"task": task}).model_dump(mode="json")
+        return {**update, "tasks": tasks}
+
     def after_plan(state: TeamState) -> str:
-        return "clarify" if state.get("plan_question") else "dispatch"
+        if state.get("plan_question"):
+            return "clarify"
+        return "image" if state.get("ask_image") else "dispatch"
 
     async def clarify(state: TeamState) -> dict:
         template = template_of(state)
@@ -930,7 +1125,7 @@ def build_team_graph(
             prompts=ts.prompts,
         )
         tokens = state.get("tokens_used", 0) + result.tokens
-        if result.passed or task.revisions >= MAX_REVISIONS:
+        if result.passed or ts.checks >= MAX_CHECKS:
             task = await save(task, tokens_used=task.tokens_used + result.tokens)
             ts = ts.model_copy(
                 update={"task": task, "phase": "gate", "check_confidence": result.confidence}
@@ -940,11 +1135,17 @@ def build_team_graph(
             tokens += routing
             task = await save(
                 task,
-                revisions=task.revisions + 1,
                 current_step=step,
                 tokens_used=task.tokens_used + result.tokens + routing,
             )
-            ts = ts.model_copy(update={"task": task, "phase": "work", "feedback": result.feedback})
+            ts = ts.model_copy(
+                update={
+                    "task": task,
+                    "phase": "work",
+                    "feedback": result.feedback,
+                    "checks": ts.checks + 1,
+                }
+            )
         return {"tasks": put(state, ts), "tokens_used": tokens}
 
     def drawer(state: TeamState, ts: TaskState, file_id: str) -> Persona:
@@ -973,6 +1174,7 @@ def build_team_graph(
         enter_task(ts.task.task_id)
         wanted = getattr(final_output(template_of(state), ts), "images", [])
         made: dict[str, FileRef] = {}
+        missed = None
         for file_id in [f for f in wanted if f in plans]:
             plan = plans[file_id]
             persona = drawer(state, ts, file_id)
@@ -998,6 +1200,8 @@ def build_team_graph(
                 file = None
             if file is not None:
                 made[file_id] = file
+            else:
+                missed = persona.name
 
         def swap(ids: list[str]) -> list[str]:
             return [made[i].file_id if i in made else i for i in ids if i not in plans or i in made]
@@ -1017,6 +1221,7 @@ def build_team_graph(
                 "aspects": {},
                 "rendered": True,
                 "redraw": False,
+                "missed": None if made else missed,
             }
         )
 
@@ -1048,6 +1253,9 @@ def build_team_graph(
                 updated_at=deps.clock(),
             )
         mode = gate(trust.level)
+        send_at = ts.send_at if planned is not None else None
+        if send_at is not None:
+            mode = "approval"
         confidence = ts.check_confidence or 0.0
         if mode == "approval":
             if trust.level == AutonomyLevel.DRAFT_ONLY:
@@ -1063,10 +1271,12 @@ def build_team_graph(
                 planned_action=planned,
                 media=media,
                 check_confidence=confidence,
+                send_at=send_at if planned is not None else None,
                 created_at=deps.clock(),
             )
             await deps.store.save_approval(approval)
             task = await save(task, status=TaskStatus.WAITING_APPROVAL)
+            ts = ts.model_copy(update={"approval_id": approval.approval_id})
             emit(
                 NeedsApproval(
                     approval_id=approval.approval_id,
@@ -1078,6 +1288,7 @@ def build_team_graph(
                     planned_action=planned,
                     media=media,
                     check_confidence=confidence,
+                    send_at=approval.send_at,
                 )
             )
         elif planned is None:
@@ -1098,7 +1309,10 @@ def build_team_graph(
             emit(outcome)
             done = isinstance(outcome, ActionDone)
             task = await save(task, status=TaskStatus.DONE if done else TaskStatus.FAILED)
-        ts = ts.model_copy(update={"task": task, "phase": "done"})
+        if ts.missed:
+            text = NO_IMAGE_MADE.format(name=ts.missed)
+            emit(Say(team_id=state["team_id"], task_id=task.task_id, persona=lead, text=text))
+        ts = ts.model_copy(update={"task": task, "phase": "done", "missed": None})
         return {"tasks": put(state, ts)}
 
     def remember(state: TeamState) -> dict[str, dict]:
@@ -1155,6 +1369,8 @@ def build_team_graph(
         ("change_schedule", change_schedule),
         ("schedule_day", schedule_day),
         ("schedule_save", schedule_save),
+        ("image", image),
+        ("other_channel", other_channel),
         ("dispatch", dispatch),
         ("specialist", specialist),
         ("check", check),
@@ -1165,24 +1381,30 @@ def build_team_graph(
 
     graph.add_edge(START, "entry")
     graph.add_conditional_edges(
-        "entry", after_entry, ["dispatch", "onboard_intro", "onboard_done", "triage"]
+        "entry", after_entry, ["dispatch", "onboard_intro", "onboard_done", "triage", END]
     )
     graph.add_edge("onboard_intro", "onboard")
     graph.add_conditional_edges("onboard", after_onboard, ["onboard", "onboard_done"])
     graph.add_edge("onboard_done", END)
     graph.add_conditional_edges(
-        "triage", after_triage, ["schedule", "change_schedule", "channels", "plan", "reply"]
+        "triage",
+        after_triage,
+        ["schedule", "change_schedule", "other_channel", "channels", "plan", "reply"],
     )
     for node in ("schedule", "change_schedule"):
         graph.add_conditional_edges(node, after_schedule, ["schedule_day", "schedule_save", END])
     graph.add_edge("schedule_day", "schedule_save")
     graph.add_edge("schedule_save", END)
     graph.add_edge("channels", "route")
+    graph.add_conditional_edges(
+        "other_channel", lambda s: "plan" if s["routed"] else END, ["plan", END]
+    )
     graph.add_edge("reply", END)
     graph.add_conditional_edges(
         "route", lambda s: "plan" if s["routed"] else "reply", ["plan", "reply"]
     )
-    graph.add_conditional_edges("plan", after_plan, ["clarify", "dispatch"])
+    graph.add_conditional_edges("plan", after_plan, ["clarify", "image", "dispatch"])
+    graph.add_edge("image", "dispatch")
     graph.add_edge("clarify", "route")
     graph.add_conditional_edges(
         "dispatch",
@@ -1270,6 +1492,15 @@ def last_own_step(steps: list[str]) -> int:
     """
     own = [index for index, step in enumerate(steps) if ":" not in step]
     return own[-1] if own else len(steps) - 1
+
+def post_task_type(template: Template) -> str | None:
+    """
+    The task type that posts to Bluesky, if the team has one.
+    """
+    return next(
+        (name for name, spec in template.task_types.items() if spec.action == "post_social"),
+        None,
+    )
 
 def cross_step(steps: list[str]) -> int | None:
     """

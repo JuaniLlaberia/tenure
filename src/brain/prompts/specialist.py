@@ -1,5 +1,6 @@
 from pydantic import BaseModel
 
+from brain.context import UNTRUSTED_RULE
 from brain.helpers.llm import Message
 from contract import Persona
 
@@ -24,7 +25,7 @@ def specialist_messages(
         "Use your tools when they help, and stop calling them once you have what you need. "
         "Never invent facts, prices, names, dates or links that aren't in the brief, the context "
         "or your research. You never publish or send anything; the founder reviews it first. "
-        f"{result}"
+        f"{UNTRUSTED_RULE} {result}"
     )
     if instructions:
         system += f"\n\nHow you work: {instructions}"

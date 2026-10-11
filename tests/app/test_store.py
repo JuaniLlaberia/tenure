@@ -8,6 +8,7 @@ from datetime import UTC, datetime, timedelta
 from uuid import uuid4
 
 import pytest
+from postgrest.exceptions import APIError
 
 from app.store.base import TelegramTopic
 from app.store.memory import InMemoryStore
@@ -93,6 +94,37 @@ async def test_missing_records_return_none(store):
     assert await store.get_task(new_id()) is None
     assert await store.get_approval(new_id()) is None
     assert await store.get_action(new_id()) is None
+
+async def test_malformed_ids_are_missing_records(store):
+    assert await store.get_approval("not-a-uuid") is None
+    assert await store.get_task("x'1") is None
+    assert await store.get_team("nope") is None
+
+async def test_supabase_reads_an_invalid_id_as_missing():
+    class Query:
+        def select(self, *args):
+            return self
+
+        def eq(self, *args):
+            return self
+
+        def limit(self, n):
+            return self
+
+        async def execute(self):
+            raise APIError({"message": "invalid input syntax for type uuid", "code": "22P02"})
+
+    class Db:
+        def table(self, name):
+            return Query()
+
+    store = SupabaseStore("https://x.supabase.co", "key")
+
+    async def db():
+        return Db()
+
+    store._db = db
+    assert await store.get_approval("nope") is None
 
 async def test_businesses_and_topics_round_trip(store):
     chat_id = -int(uuid4().int % 10**12)

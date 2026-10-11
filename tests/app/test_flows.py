@@ -23,12 +23,16 @@ def clock() -> Clock:
     return Clock()
 
 @pytest.fixture
-def brain(clock: Clock) -> FakeBrain:
-    return FakeBrain(clock=clock)
+def store() -> InMemoryStore:
+    return InMemoryStore()
 
 @pytest.fixture
-def flows(brain: FakeBrain, chat: FakeChat, clock: Clock) -> Flows:
-    return Flows(brain, chat, debounce=0, typing_every=60, clock=clock)
+def brain(store: InMemoryStore, clock: Clock) -> FakeBrain:
+    return FakeBrain(store, clock=clock)
+
+@pytest.fixture
+def flows(brain: FakeBrain, chat: FakeChat, store: InMemoryStore, clock: Clock) -> Flows:
+    return Flows(brain, chat, store=store, debounce=0, typing_every=60, clock=clock)
 
 async def say(flows: Flows, text: str, thread_id: int | None = None, message_id: int = 1) -> None:
     await flows.on_text(CHAT, thread_id, text, message_id, NOW)
@@ -151,6 +155,8 @@ async def test_edit_checks_length_then_posts_and_learns(flows, chat):
     await say(flows, "x" * 301, thread_id)
     assert "301 characters" in chat.last(thread_id).text
     await say(flows, "Launching Friday, come along.", thread_id)
+    assert post.text.endswith(f"<i>{ui.EDITING_BELOW}</i>")
+    await tap(flows, chat.find("Your version"), "Approve my version")
     assert post.text.endswith(f"<i>{ui.EDITED}</i>")
     assert chat.find("Posted to Bluesky")
     lesson = chat.find("Learned:")
@@ -191,7 +197,9 @@ async def test_reject_and_drop(flows, chat):
     assert "Okay, dropped it." in chat.last(thread_id).text
 
 async def test_promotion_then_acting_alone(chat, clock):
-    flows = Flows(FakeBrain(promotion_streak=1, clock=clock), chat, debounce=0, clock=clock)
+    store = InMemoryStore()
+    brain = FakeBrain(store, promotion_streak=1, clock=clock)
+    flows = Flows(brain, chat, store=store, debounce=0, clock=clock)
     thread_id = await marketing_team(flows, chat)
     post, _ = await drafts(flows, chat, thread_id)
     await tap(flows, post, "Approve")
@@ -225,7 +233,9 @@ async def test_unknown_topic_and_unknown_team(flows, chat):
     assert chat.last(999).text == ui.NOT_A_TEAM
     await flows.on_hire(CHAT, None, "sales")
     await flows.drain()
-    assert chat.last(None).text.startswith("⚠️ There's no 'sales' team")
+    picker = chat.last(None)
+    assert picker.text == ui.unknown_team("sales")
+    assert picker.data("Marketing") == "hi:marketing"
 
 async def test_hire_without_a_name_shows_the_picker(flows, chat):
     await setup_business(flows)
@@ -343,6 +353,7 @@ async def test_a_pending_edit_survives_a_restart(chat, clock):
 
     flows = await restart(store, chat, clock)
     await say(flows, "Launching Friday, come along.", thread_id)
+    await tap(flows, chat.find("Your version"), "Approve my version")
     assert post.text.endswith(f"<i>{ui.EDITED}</i>")
     assert chat.find("Posted to Bluesky")
 
@@ -379,8 +390,9 @@ async def test_restart_cleans_up_status_lines_and_password_messages(chat, clock)
     assert password.message_id in chat.deleted
 
 class Recording(FakeBrain):
-    def __init__(self, **kwargs) -> None:
-        super().__init__(**kwargs)
+    def __init__(self, store: InMemoryStore | None = None, **kwargs) -> None:
+        self.store = store or InMemoryStore()
+        super().__init__(self.store, **kwargs)
         self.seen: list[IncomingMessage] = []
 
     def handle_message(self, msg):
@@ -392,7 +404,7 @@ async def send_file(flows, file: IncomingFile, caption: str = "", thread_id=None
 
 async def test_a_voice_note_reaches_the_brain_as_an_attachment(chat, clock):
     brain = Recording(clock=clock)
-    flows = Flows(brain, chat, debounce=0.05, clock=clock)
+    flows = Flows(brain, chat, store=brain.store, debounce=0.05, clock=clock)
     thread_id = await marketing_team(flows, chat)
     brain.seen.clear()
     chat.files["voice-1"] = b"OggS..."
@@ -408,7 +420,7 @@ async def test_a_voice_note_reaches_the_brain_as_an_attachment(chat, clock):
 
 async def test_caption_text_and_album_join_into_one_message(chat, clock):
     brain = Recording(clock=clock)
-    flows = Flows(brain, chat, debounce=0.05, clock=clock)
+    flows = Flows(brain, chat, store=brain.store, debounce=0.05, clock=clock)
     await flows.on_start(CHAT, None, is_forum=True)
     await flows.drain()
     brain.seen.clear()
@@ -425,7 +437,7 @@ async def test_caption_text_and_album_join_into_one_message(chat, clock):
 
 async def test_files_over_20_mb_are_refused_without_calling_the_brain(chat, clock):
     brain = Recording(clock=clock)
-    flows = Flows(brain, chat, debounce=0, clock=clock)
+    flows = Flows(brain, chat, store=brain.store, debounce=0, clock=clock)
     await flows.on_start(CHAT, None, is_forum=True)
     await flows.drain()
     brain.seen.clear()
@@ -446,11 +458,12 @@ async def test_a_file_during_an_edit_keeps_the_edit_open(flows, chat):
 
     assert chat.last(thread_id).text == ui.FILE_DURING_EDIT
     await say(flows, "We launch Friday!", thread_id)
+    await tap(flows, chat.find("Your version"), "Approve my version")
     assert "Posted to Bluesky" in chat.find("Posted to Bluesky").text
 
 async def test_a_failed_download_says_so_and_sends_nothing(chat, clock):
     brain = Recording(clock=clock)
-    flows = Flows(brain, chat, debounce=0, clock=clock)
+    flows = Flows(brain, chat, store=brain.store, debounce=0, clock=clock)
     await flows.on_start(CHAT, None, is_forum=True)
     await flows.drain()
     brain.seen.clear()

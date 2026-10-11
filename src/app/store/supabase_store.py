@@ -2,8 +2,10 @@ from datetime import UTC, datetime
 from typing import Any, TypeVar
 from uuid import uuid4
 
+from postgrest.exceptions import APIError
 from pydantic import BaseModel
 from supabase import AsyncClient, acreate_client
+from supabase.lib.client_options import AsyncClientOptions
 
 from app.store.base import TelegramTopic
 from contract import (
@@ -21,6 +23,9 @@ from contract import (
 
 RESOLVED = ["approved", "edited", "rejected"]
 BUCKET = "files"
+DB_TIMEOUT = 15
+STORAGE_TIMEOUT = 30
+INVALID_TEXT = "22P02"
 
 M = TypeVar("M", bound=BaseModel)
 
@@ -44,7 +49,10 @@ class SupabaseStore:
 
     async def _db(self) -> AsyncClient:
         if self._client is None:
-            self._client = await acreate_client(self._url, self._key)
+            options = AsyncClientOptions(
+                postgrest_client_timeout=DB_TIMEOUT, storage_client_timeout=STORAGE_TIMEOUT
+            )
+            self._client = await acreate_client(self._url, self._key, options=options)
         return self._client
 
     async def _upsert(self, table: str, row: dict[str, Any], on_conflict: str = "") -> None:
@@ -56,7 +64,12 @@ class SupabaseStore:
         query = db.table(table).select("*")
         for column, value in match.items():
             query = query.eq(column, value)
-        rows = (await query.limit(1).execute()).data
+        try:
+            rows = (await query.limit(1).execute()).data
+        except APIError as error:
+            if error.code == INVALID_TEXT:
+                return None
+            raise
         return model.model_validate(rows[0]) if rows else None
 
     async def create_business(self, chat_id: int) -> str:

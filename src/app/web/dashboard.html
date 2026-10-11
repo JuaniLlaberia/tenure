@@ -260,9 +260,13 @@ kbd { font-family: var(--font-mono); font-size: 11.5px; border: 1px solid var(--
 .consequence { font-size: 13px; color: var(--muted); }
 .consequence b { color: var(--ink); font-weight: 600; }
 .actions { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; border-top: 1px solid var(--line); padding-top: 12px; }
-.actions .spacer { flex: 1; }
+.actions .spacer, .sendtime .spacer { flex: 1; }
 .rejectbox { border: 1px solid var(--bad); border-radius: 10px; padding: 12px; display: grid; gap: 10px; background: var(--bad-soft); }
 .rejectbox.redraw { background: var(--sunk); border-color: var(--line); }
+.sendtime { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 10px; font-size: 13.5px; padding: 10px 12px; border: 1px solid var(--line); border-radius: 10px; background: var(--sunk); }
+.sendtime.held { border-color: var(--ok); background: var(--ok-soft); color: var(--ok); }
+.sendtime b { font-weight: 600; }
+.sendtime input { font: inherit; border: 1px solid var(--line); border-radius: 8px; padding: 5px 8px; background: var(--surface); color: var(--ink); }
 .rejectbox textarea { background: var(--surface); }
 .btn.danger.outline { border-color: var(--bad); background: transparent; }
 .notice { padding: 40px 0; text-align: center; color: var(--muted); }
@@ -404,12 +408,13 @@ const POST_LIMIT = 300;
 const PAGES = ["home", "drafts", "teams", "schedules", "knowledge", "activity", "spend"];
 const ui = {
   lowering: null, busy: new Map(), selected: null, tab: "view", edits: {}, mail: {},
-  rejecting: null, picked: new Set(), reason: {}, removed: {}, page: "home", redrawing: null, imageReason: {},
+  rejecting: null, picked: new Set(), reason: {}, removed: {}, page: "home", redrawing: null, imageReason: {}, timing: null,
 };
 let data = null;
 let clockOffset = 0;
 let lastLoad = 0;
 let failing = false;
+let failure = "";
 
 const $ = (id) => document.getElementById(id);
 const esc = (s) => String(s ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[c]);
@@ -628,7 +633,7 @@ function changed(d) {
 }
 
 function select(id) {
-  ui.selected = id; ui.tab = "view"; ui.rejecting = null; ui.redrawing = null; ui.picked.clear();
+  ui.selected = id; ui.tab = "view"; ui.rejecting = null; ui.redrawing = null; ui.timing = null; ui.picked.clear();
   renderInbox(true);
 }
 function move(step) {
@@ -661,12 +666,46 @@ function renderInbox(force = false) {
         <span>${esc(d.type)} · ${esc(d.team)}${d.images.length ? ` · ${d.images.length} image${d.images.length > 1 ? "s" : ""}` : ""}</span>
         <span class="mono">check ${d.check}%</span>
         ${d.revision ? `<span class="pill neutral">Revision ${d.revision} of 2</span>` : ""}
+        ${d.send ? `<span class="pill ${d.send.scheduled ? "ok" : "wait"}">${d.send.scheduled ? "Scheduled" : "⏰"} ${esc(d.send.local)}</span>` : ""}
         ${ui.busy.has(d.approval_id) ? `<span class="pill in_progress">${busyLabel(d.approval_id, ui.busy.get(d.approval_id).kind, "")}</span>` : changed(d) ? `<span class="pill wait">Edited</span>` : `<span>${esc(fmtTime(d.created_at))}</span>`}
       </span>
     </button>`).join("");
   const focused = $("review").contains(document.activeElement);
   const stale = $("review").dataset.shows !== ui.selected;
   if (force || stale || !focused) renderReview();
+}
+
+function sendTimeRow(d, busy) {
+  const place = esc((d.send || data.timezone).place);
+  if (ui.timing === d.approval_id) {
+    return `
+    <div class="sendtime">
+      <label for="send-at"><b>⏰ Goes out at</b></label>
+      <input type="datetime-local" id="send-at" value="${esc(d.send ? d.send.input : "")}" ${busy}>
+      <span class="sub">${place} time</span>
+      <span class="spacer"></span>
+      <button class="btn small primary ${workingClass(`time:${d.approval_id}`, "time")}" data-act="time-save" type="button" ${busy}>${busyLabel(`time:${d.approval_id}`, "time", "Save time")}</button>
+      <button class="btn small quiet" data-act="time-cancel" type="button">Cancel</button>
+    </div>`;
+  }
+  if (d.send && d.send.scheduled) {
+    return `<div class="sendtime held"><b>✓ Approved · ⏰ goes out ${esc(d.send.local)}</b><span>(${place} time)</span></div>`;
+  }
+  if (d.send) {
+    return `
+    <div class="sendtime">
+      <span><b>⏰ Goes out ${esc(d.send.local)}</b> (${place} time) once you approve</span>
+      <span class="spacer"></span>
+      <button class="btn small" data-act="time-open" type="button" ${busy}>Change time</button>
+      <button class="btn small quiet ${workingClass(`time:${d.approval_id}`, "clear")}" data-act="time-clear" type="button" ${busy}>${busyLabel(`time:${d.approval_id}`, "clear", "Send on approval")}</button>
+    </div>`;
+  }
+  return `
+    <div class="sendtime">
+      <span>Goes out as soon as you approve.</span>
+      <span class="spacer"></span>
+      <button class="btn small" data-act="time-open" type="button" ${busy}>⏰ Schedule</button>
+    </div>`;
 }
 
 function renderReview() {
@@ -733,8 +772,10 @@ function renderReview() {
   const rules = d.rules.length ? `
     <details class="rules"><summary>${esc(d.lead)} followed ${d.rules.length} rule${d.rules.length > 1 ? "s" : ""} for this</summary>
       <div class="chips">${d.rules.map((r) => `<span class="chip rule">${esc(r)}</span>`).join("")}</div></details>` : "";
-  const what = d.kind === "post" ? "Posts to Bluesky right away. You can undo it for 10 minutes."
-    : d.kind === "email" ? `Sends to ${esc(mail.to)} right away. Emails can't be unsent.` : "Marks it done. Nothing is posted or sent.";
+  const when = d.send ? `at ${esc(d.send.local)} (${esc(d.send.place)} time)` : "right away";
+  const what = d.kind === "post" ? `Posts to Bluesky ${when}. You can undo it for 10 minutes.`
+    : d.kind === "email" ? `Sends to ${esc(mail.to)} ${when}. Emails can't be unsent.` : "Marks it done. Nothing is posted or sent.";
+  const sendRow = editable ? sendTimeRow(d, busy) : "";
   const gone = removedOf(d).size;
   const dropped = gone ? ` ${gone} image${gone > 1 ? "s" : ""} removed.` : "";
   const learn = isChanged
@@ -753,9 +794,12 @@ function renderReview() {
         <button class="btn quiet" data-act="cancel-reject" type="button" ${busy}>Cancel</button>
       </div>
     </div>` : "";
-  const label = isChanged
+  const label = d.send
+    ? (isChanged ? `Approve my version for ${esc(d.send.local)}` : `Approve for ${esc(d.send.local)}`)
+    : isChanged
     ? (d.kind === "post" ? "Post my version" : "Send my version")
     : d.kind === "post" ? "Approve and post" : d.kind === "email" ? "Approve and send" : "Approve";
+  const held = d.send && d.send.scheduled;
   const revised = d.revised_after ? `<span>Revised after your reason: “${esc(d.revised_after)}”</span>` : "";
   $("review").innerHTML = `
     <div class="review ${busy ? "busy" : ""}">
@@ -769,16 +813,22 @@ function renderReview() {
         ${body}
         ${images}
         ${rules}
-        <div class="consequence">${what} ${learn}</div>
+        ${sendRow}
+        <div class="consequence">${what} ${held ? "" : learn}</div>
       </div>
       ${reject}
+      ${held ? `
+      <div class="actions">
+        <button class="btn primary ${workingClass(id, "send-now")}" data-act="send-now" type="button" ${busy}>${busyLabel(id, "send-now", "Send now")}</button>
+        <button class="btn ${workingClass(id, "unschedule")}" data-act="unschedule" type="button" ${busy}>${busyLabel(id, "unschedule", "Cancel schedule")}</button>
+      </div>` : `
       <div class="actions">
         <button class="btn primary ${workingClass(id, "approve")}" data-act="approve" type="button" ${over || busy ? "disabled" : ""}>${busyLabel(id, "approve", label)}</button>
         ${editable ? (ui.tab === "edit" ? `<button class="btn" data-act="preview" type="button" ${busy}>Preview</button>` : `<button class="btn" data-act="edit" type="button" ${busy}>Edit</button>`) : ""}
         ${isChanged ? `<button class="btn quiet" data-act="revert" type="button" ${busy}>Undo my changes</button>` : ""}
         <span class="spacer"></span>
         <button class="btn danger outline" data-act="reject" type="button" ${busy}>Reject</button>
-      </div>
+      </div>`}
       <div class="slow" data-key="${esc(id)}" aria-live="polite">${esc(slowText(id))}</div>
     </div>`;
 }
@@ -965,7 +1015,7 @@ $("nav").addEventListener("keydown", (event) => {
 function renderLive() {
   const live = $("live");
   live.classList.toggle("down", failing);
-  if (failing) { $("live-text").textContent = "Can't reach the server, retrying"; return; }
+  if (failing) { $("live-text").textContent = failure; return; }
   if (!lastLoad) return;
   const seconds = Math.max(0, Math.round((Date.now() - lastLoad) / 1000));
   $("live-text").textContent = `Live · updated ${seconds} s ago`;
@@ -986,7 +1036,12 @@ async function load() {
     const response = await fetch(`${API}/overview`, { cache: "no-store" });
     if (response.status === 404) { show("gone"); return; }
     if (response.status === 401) { show("login"); return; }
-    if (!response.ok) throw new Error(String(response.status));
+    if (!response.ok) {
+      failing = true;
+      failure = "The database isn't answering. Retrying… Your drafts are safe.";
+      renderLive();
+      return;
+    }
     if (view !== "app") show("app");
     data = await response.json();
     lastLoad = Date.now();
@@ -995,6 +1050,7 @@ async function load() {
     render();
   } catch (error) {
     failing = true;
+    failure = "Can't reach the server. Retrying…";
   }
   renderLive();
 }
@@ -1053,6 +1109,17 @@ document.addEventListener("click", (event) => {
     case "sched-start": act(`sched:${id}`, `/schedules/${id}/start`, undefined, { kind: "start", label: "Turning on…" }); break;
     case "new-image": ui.redrawing = d.approval_id; ui.rejecting = null; renderReview(); $("image-reason")?.focus(); break;
     case "new-image-cancel": ui.redrawing = null; renderReview(); break;
+    case "time-open": ui.timing = d.approval_id; renderReview(); $("send-at")?.focus(); break;
+    case "time-cancel": ui.timing = null; renderReview(); break;
+    case "time-save": {
+      const at = $("send-at")?.value;
+      if (!at) { toast("Pick a day and time first.", true); break; }
+      act(`time:${d.approval_id}`, `/approvals/${d.approval_id}/send-time`, { at }, { kind: "time", label: "Saving…" }).then((ok) => { if (ok) { ui.timing = null; renderReview(); } });
+      break;
+    }
+    case "time-clear": act(`time:${d.approval_id}`, `/approvals/${d.approval_id}/send-time`, { at: null }, { kind: "clear", label: "Clearing…" }); break;
+    case "send-now": act(d.approval_id, `/approvals/${d.approval_id}/send-now`, undefined, { kind: "send-now", label: "Sending…" }); break;
+    case "unschedule": act(d.approval_id, `/approvals/${d.approval_id}/unschedule`, undefined, { kind: "unschedule", label: "Cancelling…" }); break;
     case "new-image-go": {
       const why = (ui.imageReason[d.approval_id] || "").trim();
       ui.redrawing = null;

@@ -4,7 +4,7 @@ from typing import Literal
 from langgraph.checkpoint.memory import InMemorySaver
 from langgraph.types import Command
 
-from brain.common import guarded, utcnow
+from brain.common import clip_request, guarded, utcnow
 from brain.deps import Deps, Settings
 from brain.flows.approvals import resolve_approval
 from brain.flows.hire import hire_team
@@ -35,7 +35,15 @@ from brain.media import (
     status,
     unheard,
 )
-from brain.prompts.lead import ABOUT_IMAGE
+from brain.prompts.chief_of_staff import STILL_SETTING_UP
+from brain.prompts.lead import (
+    ABOUT_IMAGE,
+    CANCELS,
+    DROPPED,
+    IS_DRAFT_FEEDBACK,
+    NEW_REQUEST,
+    SET_ASIDE,
+)
 from brain.templates.loader import load_templates, template_info
 from brain.usage import MeteredImages, MeteredJev, MeteredLLM, UsageLog, enter
 from contract import (
@@ -50,6 +58,7 @@ from contract import (
     PromotionResponse,
     Say,
     Store,
+    TaskStatus,
     Team,
     TeamHired,
     TemplateInfo,
@@ -57,6 +66,8 @@ from contract import (
 )
 
 RECURSION_LIMIT = 200
+WORK_QUESTIONS = {"channels", "clarify", "image", "other_channel", "schedule_day"}
+TOPIC_CHARS = 48
 
 class TenureBrain:
     """
@@ -156,16 +167,98 @@ class TenureBrain:
         described: list[MediaText] = []
         async for event in self._read(msg, lead, described):
             yield event
-        text = attachments_text(msg.text, described)
+        text = clip_request(attachments_text(msg.text, described))
         if (msg.attachments and not text) or nothing_heard(msg.text, described):
             return
         snapshot = await self.team_graph.aget_state(self._config(team))
         if snapshot.interrupts:
-            payload = Command(resume=text)
-        else:
-            payload = new_request(team, text, msg.message_id, photos(described))
+            async for event in self._reply(team, snapshot, msg, text, described):
+                yield event
+            return
+        draft = await self._feedback_target(team, snapshot.values, text)
+        if draft is not None:
+            decision = ApprovalDecision(
+                business_id=team.business_id,
+                approval_id=draft.approval_id,
+                decision="reject",
+                reason=text,
+            )
+            async for event in self.resolve_approval(decision):
+                yield event
+            return
+        payload = new_request(team, text, msg.message_id, photos(described))
         async for event in self._run(team, payload):
             yield event
+
+    async def _feedback_target(self, team: Team, values: dict, text: str) -> Approval | None:
+        """
+        The team's newest pending draft, when the message is a change to it ("make it
+        shorter"): that's a rejection with the message as the reason.
+        """
+        if not text.strip():
+            return None
+        tasks = [*(values.get("past_tasks") or {}).values(), *(values.get("tasks") or {}).values()]
+        ids = {task.get("approval_id") for task in tasks} - {None}
+        pending = [
+            approval
+            for approval in [await self.deps.store.get_approval(i) for i in ids]
+            if approval is not None and approval.status == "pending"
+        ]
+        if not pending:
+            return None
+        newest = max(pending, key=lambda approval: approval.created_at)
+        state = f"Draft:\n{newest.preview}\n\nThe founder's new message: {text}"
+        reply = await decide(self.deps, {"is_draft_feedback": IS_DRAFT_FEEDBACK}, state)
+        if reply["is_draft_feedback"].accepts("yes", self.deps.settings.decide_threshold):
+            return newest
+        return None
+
+    async def _reply(
+        self, team: Team, snapshot, msg: IncomingMessage, text: str, described: list[MediaText]
+    ) -> AsyncIterator[Event]:
+        """
+        A message while the team waits on a question about a request: the answer, a cancel
+        ("never mind") that drops the request, or a new request that sets the question aside.
+        Questions while hiring the team are always answered.
+        """
+        values = snapshot.values
+        if not set(snapshot.next) & WORK_QUESTIONS:
+            async for event in self._run(team, Command(resume=text)):
+                yield event
+            return
+        question = str((snapshot.interrupts[0].value or {}).get("question", ""))
+        state = f"Their request: {values.get('request', '')}\nQuestion: {question}\nReply: {text}"
+        reply = await decide(self.deps, {"cancels": CANCELS, "new_request": NEW_REQUEST}, state)
+        threshold = self.deps.settings.decide_threshold
+        lead = self.deps.templates[team.template].lead.persona
+        if reply["cancels"].accepts("yes", threshold):
+            await self._drop_planned(values)
+            async for event in self._run(team, {**new_request(team, "", None), "drop": True}):
+                yield event
+            yield Say(team_id=team.team_id, persona=lead, text=DROPPED)
+            return
+        if reply["new_request"].accepts("yes", threshold):
+            await self._drop_planned(values)
+            aside = SET_ASIDE.format(topic=topic(values))
+            yield Say(team_id=team.team_id, persona=lead, text=aside)
+            payload = new_request(team, text, msg.message_id, photos(described))
+            async for event in self._run(team, payload):
+                yield event
+            return
+        async for event in self._run(team, Command(resume=text)):
+            yield event
+
+    async def _drop_planned(self, values: dict) -> None:
+        """
+        The tasks a dropped request had planned but not started are marked rejected.
+        """
+        for task_id in values.get("order") or []:
+            task = await self.deps.store.get_task(task_id)
+            if task is not None and task.status == TaskStatus.PLANNED:
+                updated = task.model_copy(
+                    update={"status": TaskStatus.REJECTED, "updated_at": self.deps.clock()}
+                )
+                await self.deps.store.save_task(updated)
 
     async def _read(
         self, msg: IncomingMessage, persona: Persona, found: list[MediaText]
@@ -332,25 +425,45 @@ class TenureBrain:
                 ),
             )
             return
+        config = _thread(f"{business_id}:company")
+        snapshot = await self.company_graph.aget_state(config)
+        if snapshot.interrupts:
+            yield Say(team_id=None, persona=CHIEF_OF_STAFF, text=STILL_SETTING_UP)
+            yield Ask.model_validate(snapshot.interrupts[0].value)
+            return
         payload = {"business_id": business_id, "restart": True, "message": None}
-        async for event in _stream(self.company_graph, _thread(f"{business_id}:company"), payload):
+        async for event in _stream(self.company_graph, config, payload):
             yield event
 
     async def _company(self, msg: IncomingMessage) -> AsyncIterator[Event]:
         described: list[MediaText] = []
         async for event in self._read(msg, CHIEF_OF_STAFF, described):
             yield event
-        text = attachments_text(msg.text, described)
+        text = clip_request(attachments_text(msg.text, described))
         if (msg.attachments and not text) or nothing_heard(msg.text, described):
             return
         config = _thread(f"{msg.business_id}:company")
         snapshot = await self.company_graph.aget_state(config)
         if snapshot.interrupts:
-            payload = Command(resume=onboarding_answer(msg.text, described))
+            payload = Command(resume=onboarding_answer(clip_request(msg.text), described))
         else:
             payload = {"business_id": msg.business_id, "restart": False, "message": text}
         async for event in _stream(self.company_graph, config, payload):
             yield event
+
+def topic(values: dict) -> str:
+    """
+    A short name for the request a question was about: its tasks' titles, or its first words.
+    """
+    tasks = values.get("tasks") or {}
+    order = [task_id for task_id in values.get("order") or [] if task_id in tasks]
+    titles = [tasks[task_id]["task"]["title"] for task_id in order]
+    if titles:
+        return "“" + ", ".join(titles) + "”"
+    request = " ".join(str(values.get("request", "")).split())
+    if len(request) > TOPIC_CHARS:
+        request = request[: TOPIC_CHARS - 1] + "…"
+    return f"“{request}”"
 
 def _thread(thread_id: str) -> dict:
     return {"configurable": {"thread_id": thread_id}, "recursion_limit": RECURSION_LIMIT}

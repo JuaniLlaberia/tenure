@@ -1,4 +1,5 @@
 import json
+from datetime import UTC, datetime, timedelta
 from types import SimpleNamespace
 
 import httpx
@@ -12,7 +13,7 @@ from app.tools.bluesky import Bluesky, rich_text
 from app.tools.email import Resend, ResendError, markdown_to_html
 from app.tools.keenable import Keenable
 from app.tools.real import NO_BLUESKY, NO_EMAIL, RealTools
-from app.tools.web import TEXT_LIMIT, Web, is_public, parse_results
+from app.tools.web import PDF_NOTE, TEXT_LIMIT, Web, full_url, is_public, parse_results
 from contract import (
     ActionDone,
     ActionResult,
@@ -26,12 +27,20 @@ from contract import (
 
 URI = "at://did:plc:abc/app.bsky.feed.post/3kxyz"
 
+def feed_item(text: str, created_at: datetime, uri: str = URI):
+    record = SimpleNamespace(text=text, created_at=created_at.isoformat())
+    return SimpleNamespace(post=SimpleNamespace(uri=uri, record=record), reason=None)
+
 class FakeAtproto:
     def __init__(self, failures: list[Exception] | None = None) -> None:
         self.failures = failures or []
         self.logins = 0
         self.posts: list[str] = []
         self.deleted: list[str] = []
+        self.feed: list = []
+
+    async def get_author_feed(self, actor, limit=None, filter=None):
+        return SimpleNamespace(feed=self.feed)
 
     async def login(self, handle, password):
         self.logins += 1
@@ -87,6 +96,36 @@ async def test_bluesky_does_not_retry_other_failures():
         await bluesky.post("Hello")
     assert client.posts == []
 
+async def test_a_timed_out_post_that_went_through_is_not_a_failure():
+    class LostAnswer(FakeAtproto):
+        async def send_post(self, builder):
+            self.feed.append(feed_item(builder.build_text(), datetime.now(UTC)))
+            raise InvokeTimeoutError()
+
+    client = LostAnswer()
+    bluesky = Bluesky("demo.bsky.social", "app-pass", make_client=lambda: client)
+    uri, url = await bluesky.post("Hello")
+    assert uri == URI and url.endswith("/post/3kxyz")
+
+async def test_the_same_text_is_not_posted_twice_in_a_day():
+    client = FakeAtproto()
+    client.feed = [feed_item("Doors  open Friday", datetime.now(UTC) - timedelta(hours=3))]
+    tools = RealTools(bluesky=Bluesky("demo.bsky.social", "pw", make_client=lambda: client))
+
+    result = await tools.post_social("b1", "Doors open Friday")
+
+    assert not result.ok and "already posted" in result.error and "/post/3kxyz" in result.error
+    assert client.posts == []
+
+async def test_the_same_text_can_go_out_again_after_a_day():
+    client = FakeAtproto()
+    client.feed = [feed_item("Doors open Friday", datetime.now(UTC) - timedelta(hours=25))]
+    tools = RealTools(bluesky=Bluesky("demo.bsky.social", "pw", make_client=lambda: client))
+
+    result = await tools.post_social("b1", "Doors open Friday")
+
+    assert result.ok and client.posts == ["Doors open Friday"]
+
 def test_markdown_to_html():
     html = markdown_to_html(
         "Hi **there**,\n\n- one\n- [two](https://x.example)\n\nSee https://y.example <now>"
@@ -94,6 +133,19 @@ def test_markdown_to_html():
     assert "<strong>there</strong>" in html
     assert '<ul><li>one</li><li><a href="https://x.example">two</a></li></ul>' in html
     assert '<a href="https://y.example">https://y.example</a> &lt;now&gt;' in html
+
+def test_links_with_query_strings_keep_their_ampersands():
+    html = markdown_to_html(
+        "[Book](https://x.example/?a=1&utm_source=mail) or https://y.example/?a=1&b=2"
+    )
+    assert 'href="https://x.example/?a=1&amp;utm_source=mail"' in html
+    assert 'href="https://y.example/?a=1&amp;b=2"' in html
+    assert "&amp;amp;" not in html
+
+def test_a_quote_in_a_bare_url_stays_inside_the_link():
+    html = markdown_to_html('See https://x.example/a"onmouseover="alert(1)')
+    assert 'href="https://x.example/a&quot;onmouseover=&quot;alert(1)"' in html
+    assert ' onmouseover="' not in html
 
 def mock_http(handler) -> httpx.AsyncClient:
     return httpx.AsyncClient(transport=httpx.MockTransport(handler))
@@ -118,6 +170,14 @@ async def test_resend_errors_carry_the_reason():
 
     resend = Resend("re_key", "x@y.z", http=mock_http(handler))
     with pytest.raises(ResendError, match="testing emails"):
+        await resend.send("a@b.co", "S", "B")
+
+async def test_a_resend_error_page_that_isnt_json_is_readable():
+    def handler(request):
+        return httpx.Response(502, html="<html><body><h1>502 Bad Gateway</h1></body></html>")
+
+    resend = Resend("re_key", "x@y.z", http=mock_http(handler))
+    with pytest.raises(ResendError, match="Resend answered 502: 502 Bad Gateway"):
         await resend.send("a@b.co", "S", "B")
 
 SEARCH_PAGE = """
@@ -176,8 +236,39 @@ async def test_fetch_skips_non_text_and_truncates():
         return httpx.Response(200, text="x" * (TEXT_LIMIT + 50))
 
     web = Web(http=mock_http(handler), check_address=always_public)
-    assert await web.fetch("https://b.example/file.pdf") is None
+    pdf = await web.fetch("https://b.example/file.pdf")
+    assert pdf.text == PDF_NOTE and pdf.title == "PDF document"
     assert len((await web.fetch("https://b.example/long.txt")).text) == TEXT_LIMIT
+
+async def test_images_and_other_files_are_not_pages():
+    def handler(request):
+        return httpx.Response(200, content=b"\x89PNG", headers={"content-type": "image/png"})
+
+    web = Web(http=mock_http(handler), check_address=always_public)
+    assert await web.fetch("https://b.example/logo.png") is None
+
+async def test_a_bare_domain_is_fetched_over_https():
+    seen = []
+
+    def handler(request):
+        seen.append(str(request.url))
+        return httpx.Response(200, html=PAGE)
+
+    async def check(url: str) -> bool:
+        seen.append(f"checked {url}")
+        return True
+
+    web = Web(http=mock_http(handler), check_address=check)
+    page = await web.fetch(" brightcoaching.com/about ")
+    assert page.title == "Bright Coaching"
+    assert seen == ["checked https://brightcoaching.com/about", "https://brightcoaching.com/about"]
+
+def test_full_url_only_adds_https_to_domains():
+    assert full_url("mysite.com") == "https://mysite.com"
+    assert full_url("www.my-site.co.uk/pricing?x=1") == "https://www.my-site.co.uk/pricing?x=1"
+    assert full_url("http://mysite.com") == "http://mysite.com"
+    assert full_url("not a link") == "not a link"
+    assert full_url("localhost") == "localhost"
 
 async def test_real_tools_report_missing_connections():
     tools = RealTools()

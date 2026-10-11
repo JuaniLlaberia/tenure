@@ -5,6 +5,7 @@ brain, with scripted models. Bluesky and email are recorded instead of sent.
 
 import base64
 import re
+from datetime import UTC, datetime
 
 import pytest
 from tests.app.fakes import NOW, Clock, FakeChat
@@ -146,6 +147,8 @@ def flows(store, clock, bluesky, email, llm, images) -> Flows:
             "needs_newsletter": 0.1,
             "needs_competitor_check": 0.1,
             "needs_visual": 0.9,
+            "mentions_image": 0.9,
+            "wants_image": 0.9,
         }
     )
     tools = RealTools(bluesky=bluesky, email=email, files=Files(store, clock))
@@ -179,6 +182,7 @@ async def business(flows: Flows) -> int:
     await flows.on_start(CHAT, None, is_forum=True)
     await flows.drain()
     await say(flows, "We're Bright Coaching: career coaching for mid-career engineers, warm tone")
+    await tap(flows, chat_of(flows).find("which city's time"), "Skip (Los Angeles time)")
     answers = ["Bluesky and newsletter", "We launch Friday", "list@b.co"]
     return await hire(flows, "marketing", answers)
 
@@ -292,3 +296,36 @@ async def test_new_image_through_the_real_brain_makes_one_image(flows, images, b
     await tap(flows, again, "Approve")
     ((_, sent),) = bluesky.posts
     assert len(sent) == 1
+
+async def test_a_post_asks_about_an_image_and_no_means_none(flows, images):
+    thread_id = await business(flows)
+    await hire(flows, "design", ["Green and amber", "Illustration", "Nothing in particular"])
+    chat = chat_of(flows)
+    jev = flows._brain.deps.jev
+    jev.answers["mentions_image"] = 0.1
+    jev.answers["wants_image"] = lambda state: 0.1 if "No image" in state else 0.9
+
+    await say(flows, "Post about our Friday launch", thread_id)
+    await tap(flows, chat.find("make an image for this?"), "No image")
+
+    (card,) = cards(chat, thread_id)
+    assert card.photos == [] and images.calls == []
+
+async def test_a_named_time_goes_on_the_card_and_waits(flows, llm, clock, bluesky):
+    thread_id = await business(flows)
+    chat = chat_of(flows)
+    flows._brain.deps.jev.answers["names_send_time"] = lambda state: (
+        0.9 if "6pm" in state else 0.1
+    )
+    llm.structured_responses["SendTime"] = {"date": "2026-10-09", "time": "18:00"}
+
+    await say(flows, "Post about our launch on Friday at 6pm", thread_id)
+
+    (card,) = cards(chat, thread_id)
+    assert "⏰ Goes out Fri 9 Oct, 18:00 (Los Angeles time) once you approve" in card.text
+    await tap(flows, card, "Approve")
+    assert bluesky.posts == []
+    clock.now = datetime(2026, 10, 10, 1, 1, tzinfo=UTC)
+    await flows.tick()
+    await flows.drain()
+    assert len(bluesky.posts) == 1

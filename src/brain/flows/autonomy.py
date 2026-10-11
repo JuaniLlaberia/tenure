@@ -32,6 +32,16 @@ def record_approve(trust: Trust, now: datetime) -> Trust:
 def reset_streak(trust: Trust, now: datetime) -> Trust:
     return trust.model_copy(update={"approval_streak": 0, "updated_at": now})
 
+def back_to_asking(trust: Trust, now: datetime) -> Trust:
+    """
+    After the founder undid something the team did on its own: the task type goes back to
+    asking first (act after approval), with its streak at zero. Already asking stays put.
+    """
+    level = trust.level
+    if gate(level) != "approval":
+        level = AutonomyLevel.ACT_AFTER_APPROVAL
+    return trust.model_copy(update={"level": level, "approval_streak": 0, "updated_at": now})
+
 def promotion_level(
     trust: Trust, recent: list[Approval], max_level: AutonomyLevel, min_confidence: float
 ) -> AutonomyLevel | None:

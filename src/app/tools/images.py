@@ -7,12 +7,27 @@ from io import BytesIO
 from PIL import Image, ImageOps
 
 BLUESKY_LIMIT = 2_000_000
+EMAIL_LIMIT = 1_000_000
 MAX_SIDE = 2000
+EMAIL_SIDE = 1200
 KEEP_AS_IS = ("image/jpeg", "image/png", "image/webp")
+WHITE = (255, 255, 255)
 
 def _open(data: bytes) -> Image.Image:
+    """
+    The first frame, upright, as RGB. Transparent parts become white, not black.
+    """
     image = ImageOps.exif_transpose(Image.open(BytesIO(data)))
-    return image.convert("RGB") if image.mode not in ("RGB", "L") else image
+    if image.mode in ("RGB", "L"):
+        return image
+    if image.mode == "P" and "transparency" in image.info:
+        image = image.convert("RGBA")
+    if image.mode in ("RGBA", "LA", "PA"):
+        rgba = image.convert("RGBA")
+        flat = Image.new("RGB", rgba.size, WHITE)
+        flat.paste(rgba, mask=rgba.getchannel("A"))
+        return flat
+    return image.convert("RGB")
 
 def _jpeg(image: Image.Image, quality: int) -> bytes:
     out = BytesIO()
@@ -23,15 +38,17 @@ def size_of(data: bytes) -> tuple[int, int]:
     with Image.open(BytesIO(data)) as image:
         return ImageOps.exif_transpose(image).size
 
-def fit(data: bytes, mime_type: str, limit: int = BLUESKY_LIMIT) -> tuple[bytes, str]:
+def fit(
+    data: bytes, mime_type: str, limit: int = BLUESKY_LIMIT, side: int = MAX_SIDE
+) -> tuple[bytes, str]:
     """
     The image unchanged if it's small enough and a type Bluesky takes, otherwise a JPEG
-    under the limit: at most 2000 px a side, lowering quality, then size, until it fits.
+    under the limit: at most `side` px a side, lowering quality, then size, until it fits.
     """
     if len(data) <= limit and mime_type in KEEP_AS_IS:
         return data, mime_type
     image = _open(data)
-    image.thumbnail((MAX_SIDE, MAX_SIDE))
+    image.thumbnail((side, side))
     quality = 85
     while True:
         out = _jpeg(image, quality)
@@ -41,6 +58,12 @@ def fit(data: bytes, mime_type: str, limit: int = BLUESKY_LIMIT) -> tuple[bytes,
             quality -= 10
         else:
             image = image.resize((int(image.width * 0.8), int(image.height * 0.8)))
+
+def for_email(data: bytes, mime_type: str) -> tuple[bytes, str]:
+    """
+    An image small enough to send inline: under 1 MB and 1200 px a side.
+    """
+    return fit(data, mime_type, limit=EMAIL_LIMIT, side=EMAIL_SIDE)
 
 def thumbnail(data: bytes, side: int = 480) -> bytes:
     image = _open(data)

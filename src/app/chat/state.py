@@ -15,7 +15,7 @@ from typing import TYPE_CHECKING, Any, Literal
 from pydantic import TypeAdapter
 
 from app.chat.port import Keyboard
-from contract import AutonomyLevel, Persona, PlannedAction, Schedule
+from contract import ApprovalDecision, AutonomyLevel, Persona, PlannedAction, Schedule
 
 if TYPE_CHECKING:
     from app.store.base import AppStore
@@ -40,6 +40,9 @@ class ApprovalCard(Card):
     persona: Persona
     action: PlannedAction | None
     task_id: str | None = None
+    editable: bool = True
+    new_image: bool = False
+    retry: ApprovalDecision | None = None
 
 @dataclass
 class ActionCard(Card):
@@ -83,8 +86,22 @@ class ScheduleCard(Card):
 
 @dataclass
 class Pending:
-    kind: Literal["edit", "reason", "image", "text", "subject", "to"]
+    kind: Literal["edit", "reason", "image", "text", "subject", "to", "time"]
     approval_id: str
+    since: datetime | None = None
+
+@dataclass
+class Timed:
+    """
+    A draft with a send time. Once the founder approves it, `decision` waits here until then.
+    """
+
+    business_id: str
+    team_id: str
+    task_id: str | None
+    send_at: datetime
+    timezone: str
+    decision: ApprovalDecision | None = None
 
 @dataclass
 class EditDraft:
@@ -222,13 +239,14 @@ class AppState:
         self.passwords = Saved(j, "password", PasswordMessage, int)
         self.schedules = Saved(j, "schedule", ScheduleCard, str)
         self.edits = Saved(j, "editdraft", EditDraft, str)
+        self.timed = Saved(j, "timed", Timed, str)
         self.handled = SavedSet(j, "handled")
 
     def saved(self) -> dict[str, Saved | SavedSet]:
         containers = [
             self.approvals, self.actions, self.asks, self.offers, self.lessons, self.hire_cards,
             self.replacements, self.pending, self.status, self.passwords, self.handled,
-            self.schedules, self.edits,
+            self.schedules, self.edits, self.timed,
         ]
         return {container.kind: container for container in containers}
 
